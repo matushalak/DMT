@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn as skl
+import os
 
 def main():
     # load in data and add useful features
@@ -10,18 +11,51 @@ def main():
     # split by participant
     data_by_partic : dict[int : pd.DataFrame] = split_by_X(data, col = 'id')
 
-    for ip, pdata in data_by_partic.items():
+    # overview of variables
+    vars_overview : pd.DataFrame = overview_table(data_by_partic) if not os.path.exists('overview.csv') else pd.read_csv('overview.csv', index_col=0)
+    breakpoint()
+
+def overview_table(data_by_participant: dict[int, pd.DataFrame], verbose: bool = False) -> pd.DataFrame:
+    rows = []
+    all_vars : np.ndarray[str] = data_by_participant[1]['variable'].unique() 
+    for pid, pdata in data_by_participant.items():
         # split data by variables
-        data_by_var : dict[str : pd.DataFrame] = split_by_X(pdata, col = 'variable')
-        
-        # see how much data we have for each variable
-        print(f'\n  Participant {ip}:')
-        for var in data_by_var.keys():
-            print(var, data_by_var[var].shape[0], 'datapoints ', 
-                  ndays := (data_by_var[var]['date'].unique().size), f"days between {data_by_var[var]['date'].iloc[0]} and {data_by_var[var]['date'].iloc[ndays - 1]} ",
-                  # TODO: add average number of hour / minute measurements per day
-                  data_by_var[var]['value'].unique().size, f"unique variable values between {np.nanmin(data_by_var[var]['value'].unique())} and {np.nanmax(data_by_var[var]['value'].unique())}"
-                  )
+        data_by_var: dict[str, pd.DataFrame] = split_by_X(pdata, col='variable')
+
+        # for var, df in data_by_var.items():
+        for var in all_vars:
+            if var in data_by_var.keys():
+                df = data_by_var[var]
+                datapoints = df.shape[0]
+                ndays = df['date'].nunique()
+                dates_range = (df['date'].iloc[0], df['date'].iloc[ndays - 1])
+                unique_vals = df['value'].nunique()
+                vals_range = (np.nanmin(df['value'].unique()), np.nanmax(df['value'].unique()))
+            else:
+                datapoints, ndays, dates_range, unique_vals, vals_range = np.nan, np.nan, (np.nan,np.nan), np.nan, (np.nan,np.nan)
+            rows.append({
+                'id': pid,
+                'variable': var,
+                'n_datapoints': datapoints,
+                'n_days': ndays,
+                'first_date': dates_range[0],
+                'last_date': dates_range[1],
+                'n_unique_values': unique_vals,
+                'val_min': vals_range[0],
+                'val_max': vals_range[1],
+            })
+
+            if verbose:
+                print(f'\n  Participant {pid}:')
+                print(var, f'{datapoints} datapoints ',
+                      f"{ndays} days between {dates_range[0]} and {dates_range[1]} ",
+                      f"{unique_vals} unique values between {vals_range[0]} and {vals_range[1]}")
+    
+    overview = pd.DataFrame(rows)
+    # save res
+    overview.to_csv('overview.csv')
+    # assert not overview.isna().any().any(), 'Overview table should have no NaNs'
+    return overview
 
 #-------------- Generally useful functions ------------------
 def preprocess_df(filename:str = 'dataset_mood_smartphone.csv') -> pd.DataFrame:
