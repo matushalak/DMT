@@ -1,26 +1,34 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import sklearn as skl
+# import matplotlib.pyplot as plt
+# import sklearn as skl
 import os
+
 
 def main():
     # load in data and add useful features
     data = preprocess_df()
-    
+
     # split by participant
-    data_by_partic : dict[int : pd.DataFrame] = split_by_X(data, col = 'id')
+    data_by_partic: dict[int: pd.DataFrame] = split_by_X(data, col='id')
 
     # overview of variables
-    vars_overview : pd.DataFrame = overview_table(data_by_partic) if not os.path.exists('overview.csv') else pd.read_csv('overview.csv', index_col=0)
+    if not os.path.exists('overview.csv'):
+        vars_overview: pd.DataFrame = overview_table(data_by_partic)
+    else:
+        vars_overview = pd.read_csv('overview.csv', index_col=0)
+    vars_overview
     breakpoint()
 
-def overview_table(data_by_participant: dict[int, pd.DataFrame], verbose: bool = False) -> pd.DataFrame:
+
+def overview_table(data_by_participant: dict[int, pd.DataFrame],
+                   verbose: bool = False) -> pd.DataFrame:
     rows = []
-    all_vars : np.ndarray[str] = data_by_participant[1]['variable'].unique() 
+    all_vars: np.ndarray[str] = data_by_participant[1]['variable'].unique()
     for pid, pdata in data_by_participant.items():
         # split data by variables
-        data_by_var: dict[str, pd.DataFrame] = split_by_X(pdata, col='variable')
+        data_by_var: dict[str, pd.DataFrame] = split_by_X(pdata,
+                                                          col='variable')
 
         # for var, df in data_by_var.items():
         for var in all_vars:
@@ -30,9 +38,13 @@ def overview_table(data_by_participant: dict[int, pd.DataFrame], verbose: bool =
                 ndays = df['date'].nunique()
                 dates_range = (df['date'].iloc[0], df['date'].iloc[ndays - 1])
                 unique_vals = df['value'].nunique()
-                vals_range = (np.nanmin(df['value'].unique()), np.nanmax(df['value'].unique()))
+                vals_range = (np.nanmin(df['value'].unique()),
+                              np.nanmax(df['value'].unique()))
             else:
-                datapoints, ndays, dates_range, unique_vals, vals_range = np.nan, np.nan, (np.nan,np.nan), np.nan, (np.nan,np.nan)
+                NANs = np.nan, np.nan, (np.nan, np.nan), np.nan, (np.nan,
+                                                                  np.nan)
+                datapoints, ndays, dates_range, unique_vals, vals_range = NANs
+
             rows.append({
                 'id': pid,
                 'variable': var,
@@ -48,19 +60,22 @@ def overview_table(data_by_participant: dict[int, pd.DataFrame], verbose: bool =
             if verbose:
                 print(f'\n  Participant {pid}:')
                 print(var, f'{datapoints} datapoints ',
-                      f"{ndays} days between {dates_range[0]} and {dates_range[1]} ",
-                      f"{unique_vals} unique values between {vals_range[0]} and {vals_range[1]}")
-    
+                      f'''{ndays} days between {dates_range[0]}
+                       and {dates_range[1]} ''',
+                      f'''{unique_vals} unique values between {vals_range[0]}
+                       and {vals_range[1]}''')
+
     overview = pd.DataFrame(rows)
     # save res
     overview.to_csv('overview.csv')
-    # assert not overview.isna().any().any(), 'Overview table should have no NaNs'
     return overview
 
-#-------------- Generally useful functions ------------------
-def preprocess_df(filename:str = 'dataset_mood_smartphone.csv') -> pd.DataFrame:
+
+# -------------- Generally useful functions ------------------
+def preprocess_df(filename: str = 'dataset_mood_smartphone.csv'
+                  ) -> pd.DataFrame:
     # load in data from csv
-    data : pd.DataFrame = pd.read_csv(filename, index_col=0)
+    data: pd.DataFrame = pd.read_csv(filename, index_col=0)
     data["id"] = data["id"].apply(lambda x: int(x.split(".")[1]))
     data["time"] = pd.to_datetime(data["time"])
     # extract useful information about date time
@@ -72,10 +87,12 @@ def preprocess_df(filename:str = 'dataset_mood_smartphone.csv') -> pd.DataFrame:
 
     return data
 
-def split_by_X(data : pd.DataFrame, col: str) -> dict[int | str : pd.DataFrame]:
-    assert col in data.columns, '{} is not a column of the chosen dataframe!'.format(col)
-    return {var : data.loc[data[col] == var]
+
+def split_by_X(data: pd.DataFrame, col: str) -> dict[int | str: pd.DataFrame]:
+    assert col in data.columns, f'{col} is not a column of the dataframe!'
+    return {var: data.loc[data[col] == var]
             for var in data[col].unique()}
+
 
 if __name__ == '__main__':
     main()
