@@ -17,6 +17,9 @@ def main():
         vars_overview: pd.DataFrame = overview_table(data_by_partic)
     else:
         vars_overview = pd.read_csv('overview.csv', index_col=0)
+
+    # TODO: plot with boxplot overview for each variable
+    # TODO: cross correlations (heatmap) & distributions
     vars_overview
     breakpoint()
 
