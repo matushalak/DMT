@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def main(plot = False, mvaN = 7):
+def features_aggregated(plot = False, mvaN = 7):
     data = pd.read_csv('tables/preprocessed/df_interpolated.csv',
                        index_col=False)
     # extract useful information about date time
@@ -61,7 +61,17 @@ def main(plot = False, mvaN = 7):
         assert mva.size == pdata['mood'].size, 'each row should have a moving average variable (first row = 0)'
         
         # Create daily pivot function
-##
+
+
+def daily_trends():
+    data = pd.read_csv('tables/preprocessed/non_imputed.csv',
+                       index_col=False)
+    # extract useful information about date time
+    data["date"] = pd.to_datetime(data["date"])
+    data['month'] = data['date'].apply(lambda x: x.month)
+    data['weekday'] = data['date'].apply(lambda x: x.weekday())
+
+# TODO: add sleep
 
 if __name__ == '__main__':
-    main(True)
+    features_aggregated(False)
