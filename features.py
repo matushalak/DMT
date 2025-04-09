@@ -72,6 +72,8 @@ def daily_trends():
     data['weekday'] = data['date'].apply(lambda x: x.weekday())
 
 # TODO: add sleep
+# TODO: difference - on day AND time of day level
+# diff_agg = ["mood", "circumplex.valence", "circumplex.arousal"]
 
 if __name__ == '__main__':
     features_aggregated(False)
