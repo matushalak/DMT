@@ -63,6 +63,12 @@ def create_daily_pivot(df, participant="all", return_dict=False, counts=True):
 
         #TODO: add last first mood value of the day
         #TODO: add the min max mood of the day
+
+        #TODO: add variance within the day for mood and over window
+
+        #TODO: add the difference in mood in last 2 days
+
+        
         
         # Create a new DataFrame with the selected columns
         df_part_sum = df_part[df_part["variable"].isin(sum_agg)].copy()
