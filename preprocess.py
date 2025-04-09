@@ -2,19 +2,27 @@
 import pandas as pd
 import numpy as np
 import os
-import re
 from typing import Literal
 
-# --------- Pipeline -----------
-def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv'):
+# --------- Preprocess pipeline -----------
+def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
+                        load_from_file: bool = False,
+                        method: Literal['date', 'time_of_day', 'both'] = 'both',
+                        remove_no_mood: bool = True) -> pd.DataFrame:
+    '''
+    Main preprocessing function to be used elsewhere
+    '''
     # add weekday, hour, month
     data: pd.DataFrame = preprocess_df(filename)
     
     # daily / 3 times of day / both pivot and remove days without mood
-    data = create_pivot(data, method='both', remove_no_mood= True)
-    breakpoint()
+    data = create_pivot(data, method=method, remove_no_mood= remove_no_mood, 
+                        load_from_file=load_from_file)
+    print('basic preprocessing done!')
+    
+    return data
 
-# -------------- Generally useful functions ------------------
+# -------------- Preprocessing functions ------------------
 def preprocess_df(filename: str
                   ) -> pd.DataFrame:
     '''
@@ -34,9 +42,11 @@ def preprocess_df(filename: str
 
     return data
 
-
-def create_pivot(df: pd.DataFrame, method: Literal['date', 'time_of_day', 'both'] = 'both',
-                 remove_no_mood: bool = True):
+# can be quite easily modified to add day or even measurement-level features now
+def create_pivot(df: pd.DataFrame, 
+                 method: Literal['date', 'time_of_day', 'both'] = 'both',
+                 remove_no_mood: bool = True, 
+                 load_from_file: bool = False) -> pd.DataFrame:
     """
     adapted from @urbansirca
     Create a pivot table with daily and/or time-of-day features.
@@ -51,6 +61,10 @@ def create_pivot(df: pd.DataFrame, method: Literal['date', 'time_of_day', 'both'
     Returns:
         Combined pivot table (or list/dict per participant if further processing is desired).
     """
+    # makes it faster
+    if load_from_file:
+        return pd.read_csv(f"tables/pivot_tables_daily/daily_pivot_table_{method}.csv", index_col=0)
+    
     # for all participants
     pivot_list = []
     participants = df['id_num'].unique()
@@ -94,13 +108,18 @@ def create_pivot(df: pd.DataFrame, method: Literal['date', 'time_of_day', 'both'
             if aggregation == 'std.slide':                
                 # Use sliding_std_df as your daily pivot
                 pivot_part_daily = sliding_std(full_range, aggregation, var_combs, df_agg)
+                
             else:
                 pivot_part_daily = df_agg.pivot_table(index= 'date', 
                                                         columns="variable", 
                                                         values="value", aggfunc= aggregation)
                 
                 pivot_part_daily = pivot_part_daily.add_suffix(f'_{aggregation}_daily')
-    
+
+            # NOTE: For sum aggregations NaN = 0
+            if aggregation == 'sum':
+                pivot_part_daily = pivot_part_daily.fillna(0)
+            
             # Make sure the daily pivot index is datetime and reset_index for merging:
             pivot_part_daily = pivot_part_daily.reindex(full_range)
             pivot_part_daily.index.name = "date"
@@ -108,28 +127,24 @@ def create_pivot(df: pd.DataFrame, method: Literal['date', 'time_of_day', 'both'
     
             if method == 'both':
                 if aggregation in dailyOnly:
-                    # Reindex the daily pivot so that each day is represented by 3 time_of_day rows.
-                    full_index = pd.MultiIndex.from_product([full_range, [0, 1, 2]],
-                                                            names=['date', 'time_of_day'])
-                    pivot_agg = pivot_part_daily.reindex(full_index)
+                    # Merge daily pivot values onto every row in our full grid.
+                    # The daily pivot has one row per date; we want that repeated for each time_of_day.
+                    pivot_agg = all_df.merge(daily_reset, on="date", how="left")
+                    pivot_agg = pivot_agg.set_index(["date", "time_of_day"])
 
                 else:
-                    # Otherwise, compute the time-of-day pivot normally.
                     tod_pivot = df_agg.pivot_table(index=["date", "time_of_day"],
-                                                columns="variable",
-                                                values="value",
-                                                aggfunc=aggregation)
-                    tod_pivot = tod_pivot.add_suffix(f'_{aggregation}_tod')
+                                           columns="variable",
+                                           values="value",
+                                           aggfunc=aggregation)
                     
-                    # Merge the daily pivot onto each time-of-day row (after resetting index)
-                    tod_pivot = tod_pivot.reset_index().merge(
-                        pivot_part_daily.reset_index(), on="date", how="left"
-                    ).set_index(["date", "time_of_day"])
-                    
-                    full_index = pd.MultiIndex.from_product([full_range, [0, 1, 2]],
-                                                            names=['date', 'time_of_day'])
-                    tod_pivot = tod_pivot.reindex(full_index)
-                    pivot_agg = tod_pivot
+                    tod_pivot = tod_pivot.add_suffix(f'_{aggregation}_tod').reset_index()
+                    tod_pivot['date'] = pd.to_datetime(tod_pivot['date'])
+                    # Merge the time-of-day pivot with the full grid so that every (date, time_of_day) exists:
+                    pivot_tod = all_df.merge(tod_pivot, on=['date', 'time_of_day'], how="left")
+                    # Then merge in the daily pivot values (which will fill in for dates missing in the tod data).
+                    pivot_agg = pivot_tod.merge(daily_reset, on="date", how="left")
+                    pivot_agg = pivot_agg.set_index(["date", "time_of_day"])
             
             elif method == 'date':
                 pivot_agg = pivot_part_daily
@@ -145,8 +160,6 @@ def create_pivot(df: pd.DataFrame, method: Literal['date', 'time_of_day', 'both'
                                     aggfunc=aggregation)
                 # time of day
                 pivot_agg = pivot_agg.add_suffix(f'{aggregation}')
-                # Build a complete multi-index: each date paired with time_of_day 0, 1, and 2
-                full_index = pd.MultiIndex.from_product([full_range, [0, 1, 2]], names=['date', 'time_of_day'])
                 # Reindex the pivot table so that missing (date, time_of_day) combinations become NaNs
                 pivot_agg = pivot_agg.reindex(full_index)
 
@@ -186,6 +199,7 @@ def create_pivot(df: pd.DataFrame, method: Literal['date', 'time_of_day', 'both'
     return combined
 
 
+# works for any variable specified now
 def remove_dates_without_VAR(df: pd.DataFrame, VAR: str, start_date=None, end_date=None):
     """
     @urbansirca
@@ -245,7 +259,7 @@ def sliding_std(full_range, aggregation, var_combs, df_agg) -> pd.DataFrame:
     return sliding_std_df
     
 
-
+# NOTE: feel free to change ordering
 def sort_pivot_columns(cols):
     """
     Reorders a list of pivot table columns so that:
