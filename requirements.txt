@@ -1,3 +1,6 @@
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+python==3.11
 numpy==2.1.0
 matplotlib==3.10.1
 scipy==1.15.2
@@ -7,4 +10,3 @@ xgboost==3.0.0
 scikit-learn==1.6.1
 shap==0.47.1
 plotly==5.11.0
-
