@@ -495,6 +495,181 @@ def plotly_all_participants_histograms(df_plot, save_html=True, show_plot=True, 
         fig.show()
 
 
+def plotly_all_participants_correlations(df, save_html=True, show_plot=True, title="all_participants_correlations"):
+    """
+    Create an interactive correlation analysis figure.
+    
+    For each participant option (either all participants combined or individual participants)
+    and for each scatter plot variable pair (chosen from the numeric variables), this function creates:
+    
+    1. A heatmap correlation matrix (top row) computed on all numeric variables available for that participant.
+    2. A scatter plot (bottom row) for the selected variable pair.
+    
+    A single combined update menu (dropdown) allows the user to select the (participant, variable pair)
+    combination to display.
+    
+    Parameters:
+      df (pd.DataFrame): DataFrame that will be used to create pivot dictionary.
+                         Expected to contain at least 'id_num', 'day', and numeric variable columns.
+      save_html (bool): Whether to save the figure as an HTML file.
+      show_plot (bool): Whether to display the plot.
+      
+    Notes:
+      - This function handles lots of NaNs by relying on pandas’ .corr() (which computes pairwise correlations).
+      - It creates separate traces for each combination, and uses an update menu to toggle visibility.
+    """
+    # Create the daily pivot table for all participants.
+    # Use return_dict=True to get separate DataFrames for each participant.
+    pivot_dict = create_daily_pivot(df, participant="all", return_dict=True, counts=False)
+    
+    # Also create an "all" option by concatenating all participants' data.
+    df_all = pd.concat(pivot_dict.values(), ignore_index=True)
+    pivot_dict["all"] = df_all
+    
+    # Identify participant options. They will be the keys of pivot_dict.
+    participant_options = list(pivot_dict.keys())
+    
+    # Assume the numeric variables are those not in the grouping columns:
+    group_cols = ["id_num", "day"]
+    sample_df = pivot_dict[participant_options[0]]
+    all_vars = list(sample_df.columns)
+    numeric_vars = [col for col in all_vars if col not in group_cols and col != "date"]
+    
+    # Optionally force a specific order for some variables.
+    desired_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal"]
+    ordered_vars = [v for v in desired_order if v in numeric_vars] + [v for v in numeric_vars if v not in desired_order]
+    numeric_vars = ordered_vars
+
+    # Create a list of scatter plot pairs. Here we take all unordered pairs.
+    scatter_pairs = list(itertools.combinations(numeric_vars, 2))
+    if not scatter_pairs:
+        raise ValueError("Not enough numeric variables to form scatter plot pairs.")
+
+    # Build a figure with 2 rows: row 1 for the heatmap, row 2 for the scatter plot.
+    fig = make_subplots(
+        rows=2, cols=1,
+        row_heights=[0.5, 0.5],
+        vertical_spacing=0.1,
+        subplot_titles=("Correlation Matrix", "Scatter Plot")
+    )
+    
+    # This list will be used to later update trace visibility.
+    trace_visibility_defaults = []
+    # Map (participant, scatter_pair index) to a "visible" vector.
+    visibility_dict = {}
+    
+    # --- Create heatmap traces for each participant option.
+    heatmap_traces = []
+    for p_idx, p in enumerate(participant_options):
+        df_p = pivot_dict[p]
+        # Use only the numeric variables that are actually in df_p.
+        available_vars = [col for col in numeric_vars if col in df_p.columns]
+        if available_vars:
+            df_corr = df_p[available_vars].corr()
+            heat_trace = go.Heatmap(
+                z = df_corr.values,
+                x = df_corr.columns.tolist(),
+                y = df_corr.index.tolist(),
+                colorbar=dict(title="r"),
+                visible=False  # update later
+            )
+        else:
+            # If no variables exist for this participant, create an empty trace.
+            heat_trace = go.Heatmap(z=[], x=[], y=[], visible=False)
+        heatmap_traces.append(heat_trace)
+        fig.add_trace(heat_trace, row=1, col=1)
+        trace_visibility_defaults.append(False)
+    
+    # --- Create scatter plot traces for each participant and each scatter pair.
+    scatter_traces = []
+    for p_idx, p in enumerate(participant_options):
+        df_p = pivot_dict[p]
+        for sp_idx, (var_x, var_y) in enumerate(scatter_pairs):
+            # Only use data if both variables exist for the participant.
+            if var_x in df_p.columns and var_y in df_p.columns:
+                scatter_trace = go.Scatter(
+                    x = df_p[var_x],
+                    y = df_p[var_y],
+                    mode = "markers",
+                    marker = dict(size=8, opacity=0.7),
+                    name = f"{p} - {var_x} vs {var_y}",
+                    visible = False  # update later
+                )
+            else:
+                # Create an empty trace if one or both variables are missing.
+                scatter_trace = go.Scatter(
+                    x = [],
+                    y = [],
+                    mode = "markers",
+                    marker = dict(size=8, opacity=0.7),
+                    name = f"{p} - {var_x} vs {var_y}",
+                    visible = False
+                )
+            scatter_traces.append(scatter_trace)
+            fig.add_trace(scatter_trace, row=2, col=1)
+            trace_visibility_defaults.append(False)
+    
+    total_traces = len(heatmap_traces) + len(scatter_traces)
+    
+    # Build mapping from (participant, scatter_pair index) to a full "visible" vector.
+    for p_idx, p in enumerate(participant_options):
+        for sp_idx in range(len(scatter_pairs)):
+            # Create a boolean list (one per trace) initialized to False.
+            visible = [False] * total_traces
+            # For the heatmap: only the trace for participant p should be visible.
+            visible[p_idx] = True
+            # For scatter traces, they are arranged in blocks per participant.
+            scatter_trace_index = len(heatmap_traces) + p_idx * len(scatter_pairs) + sp_idx
+            visible[scatter_trace_index] = True
+            visibility_dict[(p, sp_idx)] = visible
+
+    # Set the default selection: use participant "all" and the first scatter pair.
+    default_key = ("all", 0)
+    default_visible = visibility_dict[default_key]
+    for i, vis in enumerate(default_visible):
+        fig.data[i].visible = vis
+
+    # --- Create an update menu with one button per (participant, scatter pair) combination.
+    menu_buttons = []
+    for p in participant_options:
+        for sp_idx, (var_x, var_y) in enumerate(scatter_pairs):
+            label = f"{'All' if p=='all' else 'Participant '+str(p)}: {var_x} vs {var_y}"
+            visible = visibility_dict[(p, sp_idx)]
+            button = dict(
+                label = label,
+                method = "update",
+                args = [
+                    {"visible": visible},
+                    {"title": f"Correlation Analysis - {'All' if p=='all' else 'Participant '+str(p)}: {var_x} vs {var_y}"}
+                ]
+            )
+            menu_buttons.append(button)
+    
+    # Update the layout with the dropdown menu.
+    fig.update_layout(
+        updatemenus=[{
+            "buttons": menu_buttons,
+            "direction": "down",
+            "showactive": True,
+            "x": 1.05,
+            "xanchor": "left",
+            "y": 1,
+            "yanchor": "top"
+        }],
+        height=800,
+        title="Correlation Analysis"
+    )
+    
+    # Optionally save as HTML.
+    if save_html:
+        outdir = "figures/plotly/correlations"
+        os.makedirs(outdir, exist_ok=True)
+        fig.write_html(os.path.join(outdir, f"{title}.html"))
+    
+    if show_plot:
+        fig.show()
+
+
 def plot_original_vs_transformed(data, column_name):
     # transform the data
     transformed_data = data.copy()
@@ -511,330 +686,103 @@ def plot_original_vs_transformed(data, column_name):
     plt.show()
 
 
+def find_negative_values_OG_df(df, drop=False):
+    """
+    Check for negative values in the DataFrame.
+    parameters:
+    df: DataFrame to check
+    drop: if True, drop the rows with negative values
+    returns:
+    df: DataFrame with negative values dropped if drop=True
+    """
+
+    exlude_variables = ["circumplex.valence", "circumplex.arousal"]
+
+    for index, row in df.iterrows():
+        if row["value"] < 0 and row["variable"] not in exlude_variables:
+            # print(row)
+            print(f"Negative value found: {row['value']} for variable {row['variable']} at time {row['time']}")
+            print(f"Participant: {row['id_num']}, Day: {row['time']}")
+            if drop:
+                print("Dropping row...")
+                df = df.drop(index=index)
+    return df
 
 
-############### LSTM FUNCTIONS ######
+# add next day values into next_day_mood column
+def add_next_day_values(df):
+    """
+    Add next day values into next_day_mood column
+    """
+    # create a new column with the next day mood
+    df["next_day_mood"] = df.groupby("id_num")["mood"].shift(-1)
+    # create a new column with the next day date
+    df["next_day"] = df.groupby("id_num")["day"].shift(-1)
+
+    # get day column moved to the 3rd last position
+    cols = df.columns.tolist()
+    cols.insert(-2, cols.pop(cols.index("day")))
+    cols.insert(-1, cols.pop(cols.index("next_day")))
+    df = df[cols]
+    return df
 
 
-# Dataset class -------------------------
-class MultiParticipantDataset(Dataset):
-    def __init__(self, df, seq_length, target_col='mood', id_col='id_num', include_target_in_features=True):
-        """
-        df: pandas DataFrame sorted by time.
-        seq_length: number of time steps in each sample.
-        target_col: the column we want to predict.
-        """
-        df = df.drop(columns=["next_day", "next_day_mood"])
-        
-        self.seq_length = seq_length
-        self.target_col = target_col
-        self.id_col = id_col
-        
-        df.sort_values(by=[id_col, 'day'], inplace=True)
-        self.data = df.reset_index(drop=True)
-
-        if include_target_in_features:
-            self.features = [col for col in self.data.columns if col not in [target_col, "day"]]
-        else:
-            self.features = [col for col in self.data.columns if col not in [target_col, id_col, "day"]]
-
-        # Precompute valid indices where the sequence is within the same participant.
-        self.valid_indices = []
-        for i in range(len(self.data) - self.seq_length):
-            participant_id = self.data.iloc[i][self.id_col]
-            if all(self.data.iloc[i:i+self.seq_length][self.id_col] == participant_id):
-                self.valid_indices.append(i)
-
-    def __len__(self):
-        return len(self.valid_indices)
-
-    def __getitem__(self, idx):
-        # Use precomputed valid index.
-        real_idx = self.valid_indices[idx]
-        row = self.data.iloc[real_idx]
-        participant_id = row[self.id_col]
-        
-        x_features = self.data.iloc[real_idx:real_idx+self.seq_length][self.features].values.astype(np.float32)
-        x_id = np.array([participant_id] * self.seq_length, dtype=np.int64)
-        
-        # The target is the next time step's mood
-        y = self.data.iloc[real_idx+self.seq_length][self.target_col]
-        
-        return torch.tensor(x_features),torch.tensor(x_id), torch.tensor(y).float()
-
-
-# Model classes -------------------------
-class LSTMModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
-        super(LSTMModel, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        
-        # Two-layer LSTM with dropout applied to outputs of each layer (except the last)
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout)
-        
-        # Fully-connected layer to output the final prediction
-        self.fc = nn.Linear(hidden_dim, output_dim)
-        
-    def forward(self, x):
-        # x: [batch_size, seq_length, input_dim]
-        batch_size = x.size(0)
-        
-        # Initialize hidden and cell states with zeros
-        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
-        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
-        
-        # Forward propagate LSTM; out shape: [batch_size, seq_length, hidden_dim]
-        out, _ = self.lstm(x, (h0, c0))
-        
-        # Use the last time step's output for prediction; shape: [batch_size, hidden_dim]
-        out = out[:, -1, :]
-        out = self.fc(out)  # shape: [batch_size, output_dim]
-        return out
-
-class GRUModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
-        super(GRUModel, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        
-        # Two-layer GRU with dropout applied between layers (if num_layers > 1)
-        self.gru = nn.GRU(input_dim, hidden_dim, num_layers, 
-                          batch_first=True, dropout=dropout)
-        
-        # Fully-connected output layer
-        self.fc = nn.Linear(hidden_dim, output_dim)
-        
-    def forward(self, x):
-        # x shape: [batch_size, seq_length, input_dim]
-        batch_size = x.size(0)
-        
-        # Initialize hidden state with zeros
-        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
-        
-        # Forward propagate through GRU
-        out, _ = self.gru(x, h0)  # out shape: [batch_size, seq_length, hidden_dim]
-        
-        # Use the output from the last time step for prediction
-        out = out[:, -1, :]  # shape: [batch_size, hidden_dim]
-        out = self.fc(out)   # shape: [batch_size, output_dim]
-        return out
-
-
-class SimpleRNNModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
-        super(SimpleRNNModel, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        
-        # Two-layer RNN with dropout applied between layers (if num_layers > 1)
-        self.rnn = nn.RNN(input_dim, hidden_dim, num_layers, 
-                          batch_first=True, dropout=dropout)
-        
-        # Fully-connected output layer
-        self.fc = nn.Linear(hidden_dim, output_dim)
-        
-    def forward(self, x):
-        # x shape: [batch_size, seq_length, input_dim]
-        batch_size = x.size(0)
-        
-        # Initialize hidden state with zeros
-        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
-        
-        # Forward propagate through RNN
-        out, _ = self.rnn(x, h0)  # out shape: [batch_size, seq_length, hidden_dim]
-        
-        # Use the output from the last time step for prediction
-        out = out[:, -1, :]  # shape: [batch_size, hidden_dim]
-        out = self.fc(out)   # shape: [batch_size, output_dim]
-        return out
+def correlate_with_next_day_mood(df):
+    """
+    Correlate all variables with next_day_mood
+    """
+    # get the columns to correlate
+    cols = df.columns.tolist()
+    cols.remove("id_num")
+    cols.remove("day")
+    cols.remove("next_day")
+    cols.remove("next_day_mood")
     
-# ------------------------------------------------------
-
-
-def normalize(df, scaler=None, scaler_target=None, transform_target=False, scaler_type="StandardScaler"):
-    df = df.copy()
-    features = [col for col in df.columns if col not in ['id_num', 'day', "date", "next_day_mood", "next_day", "mood"]]
+    # create a new dataframe with the correlations
+    df_corr = pd.DataFrame(columns=["variable", "correlation"])
     
-    if scaler is None:
-        if scaler_type == "StandardScaler":
-            scaler = StandardScaler()
-        elif scaler_type == "MinMaxScaler":
-            scaler = MinMaxScaler()
+    corrs = []
+    for col in cols:
+        corr = df[col].corr(df["next_day_mood"])
+        corrs.append(corr)
     
-    # Scale the features
-    df[features] = scaler.fit_transform(df[features])
+    df_corr = pd.DataFrame({"variable": cols, "correlation": corrs})
     
-    if transform_target:
-        if scaler_target is None:
-            if scaler_type == "StandardScaler":
-                scaler_target = StandardScaler()
-            elif scaler_type == "MinMaxScaler":
-                scaler_target = MinMaxScaler()
+    # sort the dataframe by correlation
+    df_corr = df_corr.sort_values(by=["correlation"], ascending=False)
 
-        # Scale only the target column "mood"
-        df["mood"] = scaler_target.fit_transform(df[["mood"]])
+    df_corr.reset_index(drop=True, inplace=True)
+    
+    return df_corr
 
-        # print("scaler properties:")
-        # print(scaler.mean_)
-        # print(scaler.scale_)
-        if scaler_type == "StandardScaler":
-            print("scaler properties:")
-            print(scaler.mean_)
-            print(scaler.scale_)
-        
-        return df, scaler, scaler_target
+
+
+def remove_dates_without_mood(df, participant=None, start_date=None, end_date=None):
+    """
+    Remove dates from the dataframe. If start and end date aren't provided, 
+    it will take the first and the last non-NaN mood value as the cutoffs.
+    """
+    
+    # if no participant provided, then do it for all participants
+    if participant is None:
+        participant_ids = df["id_num"].unique().tolist()
     else:
-        return df, scaler, None
-    
+        participant_ids = [participant]
 
-def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_plot=True, save_html=True, title="predictions", scaler_type="StandardScaler"):
-    """
-    Runs predictions on the data_loader using model, builds a results DataFrame using the
-    test_dataset's original data (which includes the 'day' and 'id_num' columns), and then plots
-    real vs predicted values with Plotly using the 'day' column for the x-axis and a dropdown
-    to select different participants.
+    for specific_id in participant_ids:
+        # df for an individual with mood values present
+        mood_not_nan = df[(df['id_num'] == specific_id) & (df['mood'].notna())]
 
-    Parameters:
-        model: Trained PyTorch model.
-        data_loader: DataLoader for the dataset to predict on.
-        test_dataset: The dataset instance (e.g., MultiParticipantDataset) used to create data_loader.
-                      It must have a 'data' attribute containing the original DataFrame with a 'day' column.
-        target_scaler: (Optional) Scaler used to normalize the target data.
-    """
-    model.eval()
-    all_predictions = []
-    all_targets = []
-
-    # move everything to cpu
-    model.to("cpu")
-
+        # Compute local start and end dates for this participant
+        local_start_date = pd.to_datetime(start_date) if start_date is not None else mood_not_nan['day'].min()
+        local_end_date = pd.to_datetime(end_date) if end_date is not None else mood_not_nan["day"].max()
     
-    # Run model predictions over the data_loader
-    with torch.no_grad():
-        for batch in data_loader:
-            x_features, x_id, y = batch
-            x_features = x_features.to("cpu")
-            x_id = x_id.to("cpu")
-            y = y.to("cpu")
-            outputs = model(x_features)
-            all_predictions.append(outputs.cpu().numpy())
-            all_targets.append(y.cpu().numpy())
-    
-    # Concatenate all predictions and targets into arrays.
-    all_predictions = np.concatenate(all_predictions)
-    all_targets = np.concatenate(all_targets)
-
-    # print mean sd, min max of predictions and targets
-    print("Predictions mean:", np.mean(all_predictions))
-    print("Predictions sd:", np.std(all_predictions))
-    print("Predictions min:", np.min(all_predictions))
-    print("Predictions max:", np.max(all_predictions))
-    print("Targets mean:", np.mean(all_targets))
-    print("Targets sd:", np.std(all_targets))
-    print("Targets min:", np.min(all_targets))
-    print("Targets max:", np.max(all_targets))
-
-    
-    # Inverse transform if a target scaler is provided.
-    if target_scaler is not None:
-        if scaler_type == "StandardScaler":
-            print("Target scaler mean:", target_scaler.mean_)
-            print("Target scaler scale:", target_scaler.scale_)
-        all_predictions = target_scaler.inverse_transform(all_predictions)
-        all_targets = target_scaler.inverse_transform(all_targets.reshape(-1, 1))
-    
-
-    # Compute the correct slice of the original DataFrame.
-    # The i-th prediction corresponds to data row at index (i + seq_length)
-    start_idx = test_dataset.seq_length
-    end_idx = start_idx + len(test_dataset)
-    df_results = test_dataset.data.iloc[start_idx:end_idx].copy().reset_index(drop=True)
-
-    # Add prediction and target columns to the results DataFrame.
-    df_results['Real'] = all_targets.reshape(-1)
-    df_results['Predicted'] = all_predictions.reshape(-1)
-    
-    # Get unique participant IDs from the results DataFrame.
-    participant_col = test_dataset.id_col  # e.g., 'id_num'
-    participants = df_results[participant_col].unique()
-    
-    # Build Plotly traces for each participant: two traces (real & predicted) per participant.
-    traces = []
-    for p in participants:
-        df_p = df_results[df_results[participant_col] == p]
-        traces.append(go.Scatter(
-            x=df_p['day'],
-            y=df_p['Real'],
-            mode='lines',
-            name=f'Real ({p})',
-            visible=False  # We'll control visibility via the dropdown.
-        ))
-        traces.append(go.Scatter(
-            x=df_p['day'],
-            y=df_p['Predicted'],
-            mode='lines',
-            name=f'Predicted ({p})',
-            visible=False
-        ))
-    
-    total_traces = len(traces)  # Should be 2 * number of participants.
-    
-    # Create dropdown buttons. Each button sets visibility so that only the two traces for one participant are shown.
-    dropdown_buttons = []
-    for i, p in enumerate(participants):
-        visibility = [False] * total_traces
-        # For participant p, set traces at indices 2*i and 2*i+1 to True.
-        visibility[2*i] = True
-        visibility[2*i+1] = True
-        button = dict(
-            label=str(p),
-            method="update",
-            args=[{"visible": visibility},
-                  {"title": f"Real vs Predicted Mood Values for Participant {p}",
-                   "xaxis": {"title": "Day"},
-                   "yaxis": {"title": "Mood Value"}}]
+        # boolean mask: either not the specific id OR rows between local_start_date and local_end_date
+        mask = (df['id_num'] != specific_id) | (
+            (df['id_num'] == specific_id) & 
+            (df['day'] >= local_start_date) & 
+            (df['day'] <= local_end_date)
         )
-        dropdown_buttons.append(button)
+        df = df[mask]
     
-    # Set the initial visibility: show the first participant.
-    initial_visibility = [False] * total_traces
-    initial_visibility[0] = True
-    initial_visibility[1] = True
-    for i in range(total_traces):
-        traces[i].visible = initial_visibility[i]
-    
-    # Build the figure with all traces and add the dropdown menu.
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        updatemenus=[
-            dict(
-                active=0,
-                buttons=dropdown_buttons,
-                x=1.1,
-                y=1.0,
-                showactive=True
-            )
-        ],
-        title=f"Real vs Predicted Mood Values for Participant {participants[0]}",
-        xaxis_title="Day",
-        yaxis_title="Mood Value"
-    )
-    
-    if show_plot:
-        fig.show()
-    if save_html:
-        outdir = "figures/plotly/predictions"
-        os.makedirs(outdir, exist_ok=True)
-        fig.write_html(os.path.join(outdir, f"predictions_{title}.html"))
-
-    # MAE RMSE R2
-    mae = mean_absolute_error(all_targets, all_predictions)
-    mse = mean_squared_error(all_targets, all_predictions)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(all_targets, all_predictions)
-    print(f"MAE: {mae}, RMSE: {rmse}, R2: {r2}")
-    return df_results, mae, mse, rmse, r2
-    
-    
-
+    return df
