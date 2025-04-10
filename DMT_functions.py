@@ -8,6 +8,16 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import itertools
 
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+
+import torch
+from torch.utils.data import DataLoader, Dataset
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from torch import nn
+import torch.optim as optim
+import time
+
 print("DMT_functions.py loaded")
 
 def create_daily_pivot(df, participant="all", return_dict=False, counts=True):
@@ -499,3 +509,332 @@ def plot_original_vs_transformed(data, column_name):
     sns.histplot(transformed_data[column_name], bins=30, kde=True, ax=ax[1])
     ax[1].set_title(f'Log Transformed {column_name}, with {nans_count} nans')
     plt.show()
+
+
+
+
+############### LSTM FUNCTIONS ######
+
+
+# Dataset class -------------------------
+class MultiParticipantDataset(Dataset):
+    def __init__(self, df, seq_length, target_col='mood', id_col='id_num', include_target_in_features=True):
+        """
+        df: pandas DataFrame sorted by time.
+        seq_length: number of time steps in each sample.
+        target_col: the column we want to predict.
+        """
+        df = df.drop(columns=["next_day", "next_day_mood"])
+        
+        self.seq_length = seq_length
+        self.target_col = target_col
+        self.id_col = id_col
+        
+        df.sort_values(by=[id_col, 'day'], inplace=True)
+        self.data = df.reset_index(drop=True)
+
+        if include_target_in_features:
+            self.features = [col for col in self.data.columns if col not in [target_col, "day"]]
+        else:
+            self.features = [col for col in self.data.columns if col not in [target_col, id_col, "day"]]
+
+        # Precompute valid indices where the sequence is within the same participant.
+        self.valid_indices = []
+        for i in range(len(self.data) - self.seq_length):
+            participant_id = self.data.iloc[i][self.id_col]
+            if all(self.data.iloc[i:i+self.seq_length][self.id_col] == participant_id):
+                self.valid_indices.append(i)
+
+    def __len__(self):
+        return len(self.valid_indices)
+
+    def __getitem__(self, idx):
+        # Use precomputed valid index.
+        real_idx = self.valid_indices[idx]
+        row = self.data.iloc[real_idx]
+        participant_id = row[self.id_col]
+        
+        x_features = self.data.iloc[real_idx:real_idx+self.seq_length][self.features].values.astype(np.float32)
+        x_id = np.array([participant_id] * self.seq_length, dtype=np.int64)
+        
+        # The target is the next time step's mood
+        y = self.data.iloc[real_idx+self.seq_length][self.target_col]
+        
+        return torch.tensor(x_features),torch.tensor(x_id), torch.tensor(y).float()
+
+
+# Model classes -------------------------
+class LSTMModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
+        super(LSTMModel, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        
+        # Two-layer LSTM with dropout applied to outputs of each layer (except the last)
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout)
+        
+        # Fully-connected layer to output the final prediction
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        
+    def forward(self, x):
+        # x: [batch_size, seq_length, input_dim]
+        batch_size = x.size(0)
+        
+        # Initialize hidden and cell states with zeros
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
+        
+        # Forward propagate LSTM; out shape: [batch_size, seq_length, hidden_dim]
+        out, _ = self.lstm(x, (h0, c0))
+        
+        # Use the last time step's output for prediction; shape: [batch_size, hidden_dim]
+        out = out[:, -1, :]
+        out = self.fc(out)  # shape: [batch_size, output_dim]
+        return out
+
+class GRUModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
+        super(GRUModel, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        
+        # Two-layer GRU with dropout applied between layers (if num_layers > 1)
+        self.gru = nn.GRU(input_dim, hidden_dim, num_layers, 
+                          batch_first=True, dropout=dropout)
+        
+        # Fully-connected output layer
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        
+    def forward(self, x):
+        # x shape: [batch_size, seq_length, input_dim]
+        batch_size = x.size(0)
+        
+        # Initialize hidden state with zeros
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
+        
+        # Forward propagate through GRU
+        out, _ = self.gru(x, h0)  # out shape: [batch_size, seq_length, hidden_dim]
+        
+        # Use the output from the last time step for prediction
+        out = out[:, -1, :]  # shape: [batch_size, hidden_dim]
+        out = self.fc(out)   # shape: [batch_size, output_dim]
+        return out
+
+
+class SimpleRNNModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
+        super(SimpleRNNModel, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        
+        # Two-layer RNN with dropout applied between layers (if num_layers > 1)
+        self.rnn = nn.RNN(input_dim, hidden_dim, num_layers, 
+                          batch_first=True, dropout=dropout)
+        
+        # Fully-connected output layer
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        
+    def forward(self, x):
+        # x shape: [batch_size, seq_length, input_dim]
+        batch_size = x.size(0)
+        
+        # Initialize hidden state with zeros
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
+        
+        # Forward propagate through RNN
+        out, _ = self.rnn(x, h0)  # out shape: [batch_size, seq_length, hidden_dim]
+        
+        # Use the output from the last time step for prediction
+        out = out[:, -1, :]  # shape: [batch_size, hidden_dim]
+        out = self.fc(out)   # shape: [batch_size, output_dim]
+        return out
+    
+# ------------------------------------------------------
+
+
+def normalize(df, scaler=None, scaler_target=None, transform_target=False, scaler_type="StandardScaler"):
+    df = df.copy()
+    features = [col for col in df.columns if col not in ['id_num', 'day', "date", "next_day_mood", "next_day", "mood"]]
+    
+    if scaler is None:
+        if scaler_type == "StandardScaler":
+            scaler = StandardScaler()
+        elif scaler_type == "MinMaxScaler":
+            scaler = MinMaxScaler()
+    
+    # Scale the features
+    df[features] = scaler.fit_transform(df[features])
+    
+    if transform_target:
+        if scaler_target is None:
+            if scaler_type == "StandardScaler":
+                scaler_target = StandardScaler()
+            elif scaler_type == "MinMaxScaler":
+                scaler_target = MinMaxScaler()
+
+        # Scale only the target column "mood"
+        df["mood"] = scaler_target.fit_transform(df[["mood"]])
+
+        # print("scaler properties:")
+        # print(scaler.mean_)
+        # print(scaler.scale_)
+        if scaler_type == "StandardScaler":
+            print("scaler properties:")
+            print(scaler.mean_)
+            print(scaler.scale_)
+        
+        return df, scaler, scaler_target
+    else:
+        return df, scaler, None
+    
+
+def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_plot=True, save_html=True, title="predictions", scaler_type="StandardScaler"):
+    """
+    Runs predictions on the data_loader using model, builds a results DataFrame using the
+    test_dataset's original data (which includes the 'day' and 'id_num' columns), and then plots
+    real vs predicted values with Plotly using the 'day' column for the x-axis and a dropdown
+    to select different participants.
+
+    Parameters:
+        model: Trained PyTorch model.
+        data_loader: DataLoader for the dataset to predict on.
+        test_dataset: The dataset instance (e.g., MultiParticipantDataset) used to create data_loader.
+                      It must have a 'data' attribute containing the original DataFrame with a 'day' column.
+        target_scaler: (Optional) Scaler used to normalize the target data.
+    """
+    model.eval()
+    all_predictions = []
+    all_targets = []
+
+    # move everything to cpu
+    model.to("cpu")
+
+    
+    # Run model predictions over the data_loader
+    with torch.no_grad():
+        for batch in data_loader:
+            x_features, x_id, y = batch
+            x_features = x_features.to("cpu")
+            x_id = x_id.to("cpu")
+            y = y.to("cpu")
+            outputs = model(x_features)
+            all_predictions.append(outputs.cpu().numpy())
+            all_targets.append(y.cpu().numpy())
+    
+    # Concatenate all predictions and targets into arrays.
+    all_predictions = np.concatenate(all_predictions)
+    all_targets = np.concatenate(all_targets)
+
+    # print mean sd, min max of predictions and targets
+    print("Predictions mean:", np.mean(all_predictions))
+    print("Predictions sd:", np.std(all_predictions))
+    print("Predictions min:", np.min(all_predictions))
+    print("Predictions max:", np.max(all_predictions))
+    print("Targets mean:", np.mean(all_targets))
+    print("Targets sd:", np.std(all_targets))
+    print("Targets min:", np.min(all_targets))
+    print("Targets max:", np.max(all_targets))
+
+    
+    # Inverse transform if a target scaler is provided.
+    if target_scaler is not None:
+        if scaler_type == "StandardScaler":
+            print("Target scaler mean:", target_scaler.mean_)
+            print("Target scaler scale:", target_scaler.scale_)
+        all_predictions = target_scaler.inverse_transform(all_predictions)
+        all_targets = target_scaler.inverse_transform(all_targets.reshape(-1, 1))
+    
+
+    # Compute the correct slice of the original DataFrame.
+    # The i-th prediction corresponds to data row at index (i + seq_length)
+    start_idx = test_dataset.seq_length
+    end_idx = start_idx + len(test_dataset)
+    df_results = test_dataset.data.iloc[start_idx:end_idx].copy().reset_index(drop=True)
+
+    # Add prediction and target columns to the results DataFrame.
+    df_results['Real'] = all_targets.reshape(-1)
+    df_results['Predicted'] = all_predictions.reshape(-1)
+    
+    # Get unique participant IDs from the results DataFrame.
+    participant_col = test_dataset.id_col  # e.g., 'id_num'
+    participants = df_results[participant_col].unique()
+    
+    # Build Plotly traces for each participant: two traces (real & predicted) per participant.
+    traces = []
+    for p in participants:
+        df_p = df_results[df_results[participant_col] == p]
+        traces.append(go.Scatter(
+            x=df_p['day'],
+            y=df_p['Real'],
+            mode='lines',
+            name=f'Real ({p})',
+            visible=False  # We'll control visibility via the dropdown.
+        ))
+        traces.append(go.Scatter(
+            x=df_p['day'],
+            y=df_p['Predicted'],
+            mode='lines',
+            name=f'Predicted ({p})',
+            visible=False
+        ))
+    
+    total_traces = len(traces)  # Should be 2 * number of participants.
+    
+    # Create dropdown buttons. Each button sets visibility so that only the two traces for one participant are shown.
+    dropdown_buttons = []
+    for i, p in enumerate(participants):
+        visibility = [False] * total_traces
+        # For participant p, set traces at indices 2*i and 2*i+1 to True.
+        visibility[2*i] = True
+        visibility[2*i+1] = True
+        button = dict(
+            label=str(p),
+            method="update",
+            args=[{"visible": visibility},
+                  {"title": f"Real vs Predicted Mood Values for Participant {p}",
+                   "xaxis": {"title": "Day"},
+                   "yaxis": {"title": "Mood Value"}}]
+        )
+        dropdown_buttons.append(button)
+    
+    # Set the initial visibility: show the first participant.
+    initial_visibility = [False] * total_traces
+    initial_visibility[0] = True
+    initial_visibility[1] = True
+    for i in range(total_traces):
+        traces[i].visible = initial_visibility[i]
+    
+    # Build the figure with all traces and add the dropdown menu.
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                active=0,
+                buttons=dropdown_buttons,
+                x=1.1,
+                y=1.0,
+                showactive=True
+            )
+        ],
+        title=f"Real vs Predicted Mood Values for Participant {participants[0]}",
+        xaxis_title="Day",
+        yaxis_title="Mood Value"
+    )
+    
+    if show_plot:
+        fig.show()
+    if save_html:
+        outdir = "figures/plotly/predictions"
+        os.makedirs(outdir, exist_ok=True)
+        fig.write_html(os.path.join(outdir, f"predictions_{title}.html"))
+
+    # MAE RMSE R2
+    mae = mean_absolute_error(all_targets, all_predictions)
+    mse = mean_squared_error(all_targets, all_predictions)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(all_targets, all_predictions)
+    print(f"MAE: {mae}, RMSE: {rmse}, R2: {r2}")
+    return df_results, mae, mse, rmse, r2
+    
+    
+
