@@ -671,6 +671,11 @@ def plotly_all_participants_correlations(df, save_html=True, show_plot=True, tit
 
 
 def plot_original_vs_transformed(data, column_name):
+    """
+    plot the original and transformed data
+    data: pd.DataFrame
+    column_name: str, name of the column to transform
+    """
     # transform the data
     transformed_data = data.copy()
     transformed_data[column_name] = np.log1p(data[column_name])
@@ -785,4 +790,51 @@ def remove_dates_without_mood(df, participant=None, start_date=None, end_date=No
         )
         df = df[mask]
     
+    return df
+
+
+# plot histograms with sns in subplots for all columns
+def plot_histograms(df, columns):
+    """
+    Plot histograms for selected columns in the dataframe
+    """
+
+    cols_with_nans = df[columns].isna().sum()
+    cols_with_nans = cols_with_nans[cols_with_nans > 0].index.tolist()
+    n = len(columns)
+    ncols = 3
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 5 * nrows))
+    axes = axes.flatten()
+    for i, col in enumerate(cols_with_nans):
+        sns.histplot(df[col], ax=axes[i], kde=True)
+        axes[i].set_title(col)
+        axes[i].set_xlabel('')
+        axes[i].set_ylabel('')
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+    plt.tight_layout()
+    plt.show()
+
+
+# impute everything ending with min or max with mode
+def impute_mode_groupped(df, columns):
+    """
+    Impute all columns ending with min or max with mode
+    example usage: df = impute_mean_grouped(df, df.select_dtypes(include=[np.number]).columns.tolist())
+
+
+    """
+    for col in columns:
+        df[col] = df.groupby(['id_num'])[col].transform(lambda x: x.fillna(x.mode()[0]) if not x.mode().empty else x)
+    return df
+
+
+def impute_mean_grouped(df, columns):
+    """
+    Impute with mean
+    example usage: df = impute_mean_grouped(df, df.columns[df.columns.str.endswith('min') | df.columns.str.endswith('max')])
+    """
+    for col in columns:
+        df[col] = df.groupby('id_num')[col].transform(lambda x: x.fillna(x.mean()))
     return df
