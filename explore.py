@@ -7,8 +7,14 @@ import os
 
 
 def main():
+    # Check distribution of observations
     explore_hours()
+    
+    # Check hourly trends for each variable
     explore_hourly_trends()
+
+    # After excluding flatlining variables, explore wake and bed times 
+    # (no change w times of day, consistently values in middle of the night)
     explore_sleep()
 
 def explore_hourly_trends():

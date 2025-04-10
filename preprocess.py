@@ -14,6 +14,9 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     '''
     # add weekday, hour, month
     data: pd.DataFrame = preprocess_df(filename)
+
+    # drop negative values for screentime variables
+    data = find_negative_values_OG_df(data, drop = True)
     
     # daily / 3 times of day / both pivot and remove days without mood
     data = create_pivot(data, method=method, remove_no_mood= remove_no_mood, 
@@ -36,7 +39,7 @@ def preprocess_df(filename: str = 'dataset_mood_smartphone.csv'
     data['date'] = data['time'].dt.date
     data['hour'] = data['time'].dt.hour
     times_of_day =  np.digitize(data['hour'], 
-                                [7, 17]) # 0 night / 1 day / 2 evening
+                                [10, 17]) # 0 night & morning / 1 work day / 2 evening
     data['time_of_day'] = times_of_day
 
     # add as features
@@ -56,6 +59,7 @@ def preprocess_df(filename: str = 'dataset_mood_smartphone.csv'
     )
     
     data = pd.concat([data, df_long], ignore_index=True)
+
     return data
 
 # can be quite easily modified to add day or even measurement-level features now
@@ -264,6 +268,41 @@ def remove_dates_without_VAR(df: pd.DataFrame, VAR: str, start_date=None, end_da
     return df
 
 
+def find_negative_values_OG_df(df, drop=False):
+    '''
+    @urbansirca
+    '''
+    exlude_variables = ["circumplex.valence", "circumplex.arousal"]
+
+    for index, row in df.iterrows():
+        if row["value"] < 0 and row["variable"] not in exlude_variables:
+            # print(row)
+            print(f"Negative value found: {row['value']} for variable {row['variable']} at time {row['time']}")
+            print(f"Participant: {row['id_num']}, Day: {row['time']}")
+            if drop:
+                print("Dropping row...")
+                df = df.drop(index=index)
+    return df
+
+
+def add_next_day_values(df):
+    """
+    modified from @urbansirca
+    Add next day values into next_day_mood column
+    """
+    # create a new column with the next day mood
+    df["next_day_mood"] = df.groupby("id_num")["mood"].shift(-1)
+    # create a new column with the next day date
+    df["next_day"] = df.groupby("id_num")["day"].shift(-1)
+
+    # get day column moved to the 3rd last position
+    cols = df.columns.tolist()
+    cols.insert(-2, cols.pop(cols.index("day")))
+    cols.insert(-1, cols.pop(cols.index("next_day")))
+    df = df[cols]
+    return df
+
+# ------------- Early feature engineering functions -----------÷÷
 def sliding_std(full_range, aggregation, var_combs, df_agg) -> pd.DataFrame:
     # For a sliding window std, create an empty DataFrame indexed by the full date range.
     sliding_std_df = pd.DataFrame(index=full_range)
@@ -295,6 +334,7 @@ def sliding_std(full_range, aggregation, var_combs, df_agg) -> pd.DataFrame:
     
     return sliding_std_df
 
+
 # Define functions for bedtime and wakeup time within specific windows.
 def get_bed_time(h):
     # - times >= 19 are kept as is (e.g. 19,20,...,23)
@@ -319,6 +359,8 @@ def get_wakeup_time(h):
     h = h[(h >= 5) & (h < 13)]
     return h.min() if not h.empty else np.nan
 
+
+# ------------ utils ------------
 # NOTE: feel free to change ordering
 def sort_pivot_columns(cols):
     """

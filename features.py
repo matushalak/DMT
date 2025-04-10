@@ -1,16 +1,18 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from preprocess import preprocess_pipeline, preprocess_df
+from preprocess import preprocess_pipeline
+from collections import deque
 
 def engineer_features(preprocessed_df: pd.DataFrame,
-                      mvaN = 7) -> pd.DataFrame:
-    # TODO: add sleep
+                      mvaN = 7, sleep_debt_days = 3) -> pd.DataFrame:
     # TODO: difference - on day AND time of day level
     # TODO: diff_agg = ["mood", "circumplex.valence", "circumplex.arousal"]
     # difference feature from previous day
     mood_changes = []
     mvaNs = []
+    hsleep = []
+    sleep_debt = []
     for participant, pdata in preprocessed_df.groupby('id_num'):
         mood_change =  np.array(pdata['mood'][1:]) - np.array(pdata['mood'][0:-1])
         # add no mood change for first day
