@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 from typing import Literal
+import impute as IMP
 
 # --------- Preprocess pipeline -----------
 def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
@@ -12,16 +13,36 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     '''
     Main preprocessing function to be used elsewhere
     '''
+    ### 1) BASIC PREPROCESSING
     # add weekday, hour, month
     data: pd.DataFrame = preprocess_df(filename)
 
     # drop negative values for screentime variables
-    data = find_negative_values_OG_df(data, drop = True)
+    data = find_negative_values_OG_FAST(data, drop = True)
     
-    # daily / 3 times of day / both pivot and remove days without mood
+    # daily / 3 times of day / both pivot and remove days without mood 
+    # also saves the dataframe
     data = create_pivot(data, method=method, remove_no_mood= remove_no_mood, 
                         load_from_file=load_from_file)
-    print('basic preprocessing done!')
+    print('Basic preprocessing done!')
+
+    ### 2) IMPUTATIONS
+    # get categories of variables for different imputations
+    imput_categories = IMP.categories(data.columns)
+    
+    # perform all imputations
+    data = IMP.imputations(imput_categories, data)
+    
+    # add target and crop last day for each participant without target
+    data = add_next_day_values(data, -3 if method != 'date' else -1)
+    print('Imputations complete!')
+    
+    ### 3) FEATURE ENGINEERING
+    # data = engineer_features(data)
+
+    breakpoint()
+    
+
     
     return data
 
@@ -41,24 +62,6 @@ def preprocess_df(filename: str = 'dataset_mood_smartphone.csv'
     times_of_day =  np.digitize(data['hour'], 
                                 [10, 17]) # 0 night & morning / 1 work day / 2 evening
     data['time_of_day'] = times_of_day
-
-    # add as features
-    data['month'] = data['time'].dt.month
-    data['weekday'] = data['time'].dt.weekday
-    # Create a copy of the DataFrame without the 'value' column for melting.
-    data_for_melt = data.copy()
-    if "value" in data_for_melt.columns:
-        data_for_melt = data_for_melt.drop(columns=["value"])
-        
-    df_long = pd.melt(
-        data_for_melt,
-        id_vars=["id_num", "time", "date", "time_of_day"],
-        value_vars=["weekday", "month"],
-        var_name="variable",
-        value_name="value"
-    )
-    
-    data = pd.concat([data, df_long], ignore_index=True)
 
     return data
 
@@ -109,7 +112,7 @@ def create_pivot(df: pd.DataFrame,
         max_agg = ["activity", "circumplex.valence", "circumplex.arousal", "mood"]
         min_agg = ["circumplex.valence", "circumplex.arousal", "mood"]
         # first, last - only DAILY
-        first_agg = ["mood", "circumplex.valence", "circumplex.arousal", "weekday", "month"]
+        first_agg = ["mood", "circumplex.valence", "circumplex.arousal"]
         last_agg = ["mood", "circumplex.valence", "circumplex.arousal"]
 
         # Create a new DataFrame with the selected columns for each possible aggregation
@@ -233,6 +236,20 @@ def create_pivot(df: pd.DataFrame,
     if remove_no_mood:
         combined = remove_dates_without_VAR(combined, VAR = 'mood_mean_daily')
 
+    # rename columns
+    combined.rename(columns={
+        'wakeup_time_first_daily':'wake_time',
+        'bed_time_last_daily': 'bed_time',
+        'month_first_daily' : 'month',
+        'weekday_first_daily' : 'weekday'}, inplace=True)
+    
+    # fill nans for month and weekday
+    combined['date'] = pd.to_datetime(combined['date'])
+    combined['month'] = combined['date'].dt.month
+    combined['weekday'] = combined['date'].dt.weekday
+    combined.insert(2, "month", combined.pop('month'))
+    combined.insert(3, "weekday", combined.pop('weekday'))
+    
     # save the combined dataframe to a csv file
     if not os.path.exists("tables/pivot_tables_daily"):
         os.makedirs("tables/pivot_tables_daily")
@@ -268,38 +285,39 @@ def remove_dates_without_VAR(df: pd.DataFrame, VAR: str, start_date=None, end_da
     return df
 
 
-def find_negative_values_OG_df(df, drop=False):
+def find_negative_values_OG_FAST(df, drop=False):
     '''
-    @urbansirca
+    removes negative values
     '''
-    exlude_variables = ["circumplex.valence", "circumplex.arousal"]
+    exclude_variables = ["circumplex.valence", "circumplex.arousal"]
+    # Create a boolean mask for rows with negative 'value' that are NOT in exclude_variables.
+    mask = (df["value"] < 0) & (~df["variable"].isin(exclude_variables))
+    if drop:
+        df = df.loc[~mask]
+        return df
+    
+    else: # for exploration
+        negatives = df.loc[mask]
+        for row in negatives.itertuples():
+            print(f"Negative value found: {row.value} for variable {row.variable} at time {row.time}")
+            print(f"Participant: {row.id_num}, Day: {row.time}")
 
-    for index, row in df.iterrows():
-        if row["value"] < 0 and row["variable"] not in exlude_variables:
-            # print(row)
-            print(f"Negative value found: {row['value']} for variable {row['variable']} at time {row['time']}")
-            print(f"Participant: {row['id_num']}, Day: {row['time']}")
-            if drop:
-                print("Dropping row...")
-                df = df.drop(index=index)
-    return df
 
-
-def add_next_day_values(df):
+def add_next_day_values(df, shift: int = -3):
     """
     modified from @urbansirca
     Add next day values into next_day_mood column
     """
     # create a new column with the next day mood
-    df["next_day_mood"] = df.groupby("id_num")["mood"].shift(-1)
+    df["next_day_mood"] = df.groupby("id_num")["mood_mean_daily"].shift(shift)
     # create a new column with the next day date
-    df["next_day"] = df.groupby("id_num")["day"].shift(-1)
+    df["next_day"] = df.groupby("id_num")["date"].shift(shift)
 
-    # get day column moved to the 3rd last position
-    cols = df.columns.tolist()
-    cols.insert(-2, cols.pop(cols.index("day")))
-    cols.insert(-1, cols.pop(cols.index("next_day")))
-    df = df[cols]
+    # target right before mood_mean_daily position
+    df.insert(5, "target", df.pop("next_day_mood"))
+    df.insert(2, "next_date", df.pop("next_day"))
+    # drop last day without target for each participant
+    df = df.dropna(subset=['target', 'next_date'])
     return df
 
 # ------------- Early feature engineering functions -----------÷÷
@@ -386,7 +404,7 @@ def sort_pivot_columns(cols):
     
     # Define your desired base variable order. For apps, we group any variable
     # that starts with "appCat" into the "appCat" group.
-    base_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal", "wakeup_time", "bed_time", "month", "weekday", "call", "sms", "appCat"]
+    base_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal", "wakeup_time", "bed_time", "call", "sms", "appCat"]
     
     # Define aggregation orders.
     non_sum_order = ["mean", "std", "std.slide", "max", "min", "first", "last"]

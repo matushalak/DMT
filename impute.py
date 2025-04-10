@@ -1,4 +1,78 @@
 #@matushalak
+import pandas as pd
+
+# -------------- imputation functions from urban
+# impute everything ending with min or max with mode
+# per participant
+def impute_mode_grouped(df, columns):
+    """
+    Impute all columns ending with min or max with mode
+    example usage: df = impute_mean_grouped(df, df.select_dtypes(include=[np.number]).columns.tolist())
+    """
+    for col in columns:
+        df[col] = df.groupby('id_num')[col].transform(lambda x: x.fillna(x.mode()[0]) if not x.mode().empty else x)
+    return df
+
+# per participant
+def impute_mean_grouped(df, columns):
+    """
+    Impute with mean
+    example usage: df = impute_mean_grouped(df, df.columns[df.columns.str.endswith('min') | df.columns.str.endswith('max')])
+    """
+    for col in columns:
+        df[col] = df.groupby('id_num')[col].transform(lambda x: x.fillna(x.mean()))
+    return df
+
+# per participant
+def interpolate(df: pd.DataFrame, columns, method= 'time', order = 2):
+    """
+    Impute with interpolation of chosen method
+    """
+    for col in columns:
+        if method in ('polynomial', 'spline'):
+            df[col] = df.groupby('id_num').interpolate(method = method, order = order)
+        else:
+            df[col] = df.groupby('id_num')[col].interpolate(method = method)
+    return df
+
+# all at once
+def impute_not_used(df, columns):
+    for col in df.columns:
+        if any(col.startswith(sumcol) for sumcol in columns):
+            df[col] = df[col].fillna(0)
+    return df
+
+def categories(columns):
+    sum_imp, mean_imp, mode_imp, iterp_imp = [], [], [], []
+    for col in columns:
+        # sum columns
+        if any(sumcol in col for sumcol in ('appCat', 'sms', 'call')):
+            sum_imp.append(col)
+        # mean columns
+        elif any(meancol in col for meancol in ('wake', 'bed')):
+            mean_imp.append(col)
+        # mode columns
+        elif any(modecol in col for modecol in ('min', 'max')):
+            mode_imp.append(col)
+        # interpolation columns
+        elif any(interp in col for interp in ('mood', 'circumplex')):
+            mode_imp.append(col)
+
+    return sum_imp, mean_imp, mode_imp, iterp_imp
+
+def imputations(column_categories, data):
+    sum_imp, mean_imp, mode_imp, interp_imp = column_categories
+    # for sum categories, NaNs = 0
+    data = impute_not_used(data, sum_imp)
+    # mean imputations
+    data = impute_mean_grouped(data, mean_imp)
+    # mode imputations
+    data = impute_mode_grouped(data, mode_imp)
+    # iterpolations
+    data = interpolate(data, interp_imp)
+
+    assert all(data.notna()), 'Still some non-interpolated values'
+    return data
 
 if __name__ == '__main__':
     pass
