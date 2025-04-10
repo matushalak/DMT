@@ -68,7 +68,7 @@ def create_daily_pivot(df, participant="all", return_dict=False, counts=True):
 
         #TODO: add the difference in mood in last 2 days
 
-        
+
         
         # Create a new DataFrame with the selected columns
         df_part_sum = df_part[df_part["variable"].isin(sum_agg)].copy()
@@ -484,3 +484,18 @@ def plotly_all_participants_histograms(df_plot, save_html=True, show_plot=True, 
     if show_plot:
         fig.show()
 
+
+def plot_original_vs_transformed(data, column_name):
+    # transform the data
+    transformed_data = data.copy()
+    transformed_data[column_name] = np.log1p(data[column_name])
+
+    # count nans for that feature
+    nans_count = data[column_name].isna().sum()
+
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+    sns.histplot(data[column_name], bins=30, kde=True, ax=ax[0])
+    ax[0].set_title(f'Original {column_name}')
+    sns.histplot(transformed_data[column_name], bins=30, kde=True, ax=ax[1])
+    ax[1].set_title(f'Log Transformed {column_name}, with {nans_count} nans')
+    plt.show()
