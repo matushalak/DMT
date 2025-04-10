@@ -25,24 +25,21 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     data = create_pivot(data, method=method, remove_no_mood= remove_no_mood, 
                         load_from_file=load_from_file)
     print('Basic preprocessing done!')
-
     ### 2) IMPUTATIONS
     # get categories of variables for different imputations
     imput_categories = IMP.categories(data.columns)
     
     # perform all imputations
-    data = IMP.imputations(imput_categories, data)
-    
-    # add target and crop last day for each participant without target
-    data = add_next_day_values(data, -3 if method != 'date' else -1)
+    data = IMP.imputations(imput_categories, data) 
     print('Imputations complete!')
     
     ### 3) FEATURE ENGINEERING
     # data = engineer_features(data)
 
-    breakpoint()
-    
-
+    ### 4) add target and crop last day for each participant without target
+    data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
+                               name = method) # saves the DF if name provided
+    print('Added features!')
     
     return data
 
@@ -154,8 +151,8 @@ def create_pivot(df: pd.DataFrame,
                 pivot_part_daily = pivot_part_daily.add_suffix(f'_{aggregation}_daily')
 
             # NOTE: For sum aggregations NaN = 0
-            if aggregation == 'sum':
-                pivot_part_daily = pivot_part_daily.fillna(0)
+            # if aggregation == 'sum':
+            #     pivot_part_daily = pivot_part_daily.fillna(0)
             
             # Make sure the daily pivot index is datetime and reset_index for merging:
             pivot_part_daily = pivot_part_daily.reindex(full_range)
@@ -192,6 +189,18 @@ def create_pivot(df: pd.DataFrame,
             
             elif method == 'date':
                 pivot_agg = pivot_part_daily
+                if aggregation == 'last':
+                    # add sleep info
+                    # Reset the index so that "date" becomes a column
+                    pivot_agg = pivot_agg.reset_index()
+                    # Merge the sleep info from daily_reset (which has one row per date)
+                    pivot_agg = pivot_agg.merge(
+                        daily_reset[['date', 'wakeup_time_first_daily', 'bed_time_last_daily']], 
+                        on='date', how='left'
+                    )
+                    # Set the index back to 'date' 
+                    pivot_agg = pivot_agg.set_index('date')
+
                 # Create a complete date range from the earliest to the latest day for this participant
                 pivot_agg = pivot_agg.reindex(full_range)
                 pivot_agg.index.name = "date"
@@ -303,7 +312,7 @@ def find_negative_values_OG_FAST(df, drop=False):
             print(f"Participant: {row.id_num}, Day: {row.time}")
 
 
-def add_next_day_values(df, shift: int = -3):
+def add_next_day_values(df, shift: int = -3, name : str | None = None):
     """
     modified from @urbansirca
     Add next day values into next_day_mood column
@@ -318,6 +327,12 @@ def add_next_day_values(df, shift: int = -3):
     df.insert(2, "next_date", df.pop("next_day"))
     # drop last day without target for each participant
     df = df.dropna(subset=['target', 'next_date'])
+    
+    if name is not None:
+        # save the combined dataframe to a csv file
+        if not os.path.exists(impdir := "tables/imputed"):
+            os.makedirs(impdir)
+        df.to_csv(os.path.join(impdir, f"df_ready_{name}.csv"), index=False)
     return df
 
 # ------------- Early feature engineering functions -----------÷÷
@@ -465,4 +480,4 @@ def sort_pivot_columns(cols):
 
 
 if __name__ == '__main__':
-    preprocess_pipeline()
+    preprocess_pipeline(method='both')
