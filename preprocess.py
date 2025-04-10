@@ -23,7 +23,7 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     return data
 
 # -------------- Preprocessing functions ------------------
-def preprocess_df(filename: str
+def preprocess_df(filename: str = 'dataset_mood_smartphone.csv'
                   ) -> pd.DataFrame:
     '''
     Very first preprocessing function
@@ -35,7 +35,8 @@ def preprocess_df(filename: str
     # extract useful information about date time
     data['date'] = data['time'].dt.date
     data['hour'] = data['time'].dt.hour
-    times_of_day =  np.digitize(data['hour'], [7, 17]) # 0 night / 1 day / 2 evening
+    times_of_day =  np.digitize(data['hour'], 
+                                [7, 17]) # 0 night / 1 day / 2 evening
     data['time_of_day'] = times_of_day
 
     # add as features
@@ -78,11 +79,16 @@ def create_pivot(df: pd.DataFrame,
     """
     # makes it faster
     if load_from_file:
-        return pd.read_csv(f"tables/pivot_tables_daily/daily_pivot_table_{method}.csv", index_col=0)
+        return pd.read_csv(f"tables/pivot_tables_daily/daily_pivot_table_{method}.csv")
     
     # for all participants
     pivot_list = []
     participants = df['id_num'].unique()
+
+    # for wake and bed times, see 1 day as between 5AM and 5AM the next day
+    df["time"] = pd.to_datetime(df["time"])
+    df["shifted_time"] = df["time"] - pd.Timedelta(hours=5)
+    df["shifted_date"] = df["shifted_time"].dt.date
 
     # Process each participant separately
     for part in participants:
@@ -117,9 +123,13 @@ def create_pivot(df: pd.DataFrame,
         all_df = pd.DataFrame(list(full_index), columns=['date','time_of_day'])
         
         # get wakeup and sleep times
-        daily_times = df_part.groupby("date").agg(
-                        bed_time_last_daily=("hour", lambda s: s[s >= 17].max() if (s >= 17).any() else np.nan),
-                        wakeup_time_first_daily=("hour", lambda s: s[(s >= 5) & (s < 17)].min() if ((s >= 5) & (s < 17)).any() else np.nan)
+        # exclude variables which do not fluctuate throughout the day (activity)
+        exclude = ['activity']
+        df_TIMES = df_part.copy()
+        df_TIMES.drop(df_TIMES[df_TIMES['variable'].isin(exclude)].index, inplace = True)
+        daily_times = df_TIMES.groupby("shifted_date").agg(
+                        bed_time_last_daily=("hour", get_bed_time),
+                        wakeup_time_first_daily=("hour", get_wakeup_time)
                     ).reset_index()      
         
         for aggregation, var_combs in zip(aggs, var_lists):
@@ -149,7 +159,7 @@ def create_pivot(df: pd.DataFrame,
             if aggregation == 'last':
                 # Merge in the daily meta features (bed_time and wakeup_time)
                 daily_reset["date"] = pd.to_datetime(daily_reset["date"])
-                daily_times["date"] = pd.to_datetime(daily_times["date"])
+                daily_times["date"] = pd.to_datetime(daily_times["shifted_date"])
                 daily_reset = daily_reset.merge(daily_times, on="date", how="left")
     
             if method == 'both':
@@ -284,7 +294,30 @@ def sliding_std(full_range, aggregation, var_combs, df_agg) -> pd.DataFrame:
         sliding_std_df[col_name] = std_values
     
     return sliding_std_df
+
+# Define functions for bedtime and wakeup time within specific windows.
+def get_bed_time(h):
+    # - times >= 19 are kept as is (e.g. 19,20,...,23)
+    h_late = h[h >= 18]                  # late evening values (unchanged)
+    # - times < 5 are adjusted by adding 24 (so 3 becomes 27)
+    h_early = h[h < 5].copy()              # early morning values
+    h_early_adjusted = h_early + 24       # shift these by 24
+    # Combine both series
+    combined = h_late._append(h_early_adjusted)
+    if not combined.empty:
+        max_val = combined.max()
+        # Convert back: if max_val is 24 or more, subtract 24.
+        if max_val >= 24:
+            return max_val - 24
+        else:
+            return max_val
+    else:
+        return np.nan
     
+def get_wakeup_time(h):
+    # Consider only times in the wakeup window (e.g., 4:00 to 15:00)
+    h = h[(h >= 5) & (h < 13)]
+    return h.min() if not h.empty else np.nan
 
 # NOTE: feel free to change ordering
 def sort_pivot_columns(cols):
