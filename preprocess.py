@@ -33,13 +33,28 @@ def preprocess_df(filename: str
     data["id_num"] = data["id"].apply(lambda x: int(x.split(".")[1]))
     data["time"] = pd.to_datetime(data["time"])
     # extract useful information about date time
-    data['month'] = data['time'].dt.month
     data['date'] = data['time'].dt.date
-    data['weekday'] = data['time'].dt.weekday
     data['hour'] = data['time'].dt.hour
     times_of_day =  np.digitize(data['hour'], [7, 17]) # 0 night / 1 day / 2 evening
     data['time_of_day'] = times_of_day
 
+    # add as features
+    data['month'] = data['time'].dt.month
+    data['weekday'] = data['time'].dt.weekday
+    # Create a copy of the DataFrame without the 'value' column for melting.
+    data_for_melt = data.copy()
+    if "value" in data_for_melt.columns:
+        data_for_melt = data_for_melt.drop(columns=["value"])
+        
+    df_long = pd.melt(
+        data_for_melt,
+        id_vars=["id_num", "time", "date", "time_of_day"],
+        value_vars=["weekday", "month"],
+        var_name="variable",
+        value_name="value"
+    )
+    
+    data = pd.concat([data, df_long], ignore_index=True)
     return data
 
 # can be quite easily modified to add day or even measurement-level features now
@@ -77,15 +92,14 @@ def create_pivot(df: pd.DataFrame,
         # on daily AND time of day level
         mean_agg = ["mood", "circumplex.valence", "circumplex.arousal"] # not sure about activity
         # only DAILY
-        # TODO: sliding window!!!
         std_agg = ["mood", "circumplex.valence", "circumplex.arousal"] # variance 
         # only DAILY
-        sum_agg = [col for col in df_part["variable"].unique() if col not in mean_agg + ["id_num", "time", "date"]]
+        sum_agg = [col for col in df_part["variable"].unique() if col not in mean_agg + ["id_num", "time", "date", "month", "weekday"]]
         # also select min, max - on day level AND time of day level
         max_agg = ["activity", "circumplex.valence", "circumplex.arousal", "mood"]
         min_agg = ["circumplex.valence", "circumplex.arousal", "mood"]
         # first, last - only DAILY
-        first_agg = ["mood", "circumplex.valence", "circumplex.arousal"]
+        first_agg = ["mood", "circumplex.valence", "circumplex.arousal", "weekday", "month"]
         last_agg = ["mood", "circumplex.valence", "circumplex.arousal"]
 
         # Create a new DataFrame with the selected columns for each possible aggregation
@@ -102,10 +116,16 @@ def create_pivot(df: pd.DataFrame,
         # Also create a DataFrame version of the full grid
         all_df = pd.DataFrame(list(full_index), columns=['date','time_of_day'])
         
+        # get wakeup and sleep times
+        daily_times = df_part.groupby("date").agg(
+                        bed_time_last_daily=("hour", lambda s: s[s >= 17].max() if (s >= 17).any() else np.nan),
+                        wakeup_time_first_daily=("hour", lambda s: s[(s >= 5) & (s < 17)].min() if ((s >= 5) & (s < 17)).any() else np.nan)
+                    ).reset_index()      
+        
         for aggregation, var_combs in zip(aggs, var_lists):
             df_agg = df_part[df_part["variable"].isin(var_combs)].copy()
             # sliding window std
-            if aggregation == 'std.slide':                
+            if aggregation == 'std.slide':
                 # Use sliding_std_df as your daily pivot
                 pivot_part_daily = sliding_std(full_range, aggregation, var_combs, df_agg)
                 
@@ -124,6 +144,13 @@ def create_pivot(df: pd.DataFrame,
             pivot_part_daily = pivot_part_daily.reindex(full_range)
             pivot_part_daily.index.name = "date"
             daily_reset = pivot_part_daily.reset_index()
+
+            # only need to do this once
+            if aggregation == 'last':
+                # Merge in the daily meta features (bed_time and wakeup_time)
+                daily_reset["date"] = pd.to_datetime(daily_reset["date"])
+                daily_times["date"] = pd.to_datetime(daily_times["date"])
+                daily_reset = daily_reset.merge(daily_times, on="date", how="left")
     
             if method == 'both':
                 if aggregation in dailyOnly:
@@ -284,7 +311,7 @@ def sort_pivot_columns(cols):
     
     # Define your desired base variable order. For apps, we group any variable
     # that starts with "appCat" into the "appCat" group.
-    base_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal", "call", "sms", "appCat"]
+    base_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal", "wakeup_time", "bed_time", "month", "weekday", "call", "sms", "appCat"]
     
     # Define aggregation orders.
     non_sum_order = ["mean", "std", "std.slide", "max", "min", "first", "last"]
