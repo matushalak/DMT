@@ -1,3 +1,12 @@
+*.html
+*.png
+tables/
+ray_checkpoints/
+models/
+tuning_results*/
+*.pt
+checkpoints/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -1,9 +1,12 @@
 # This file may be used to create an environment using:
 # $ conda create --name <env> --file <this file>
-python = 3.11
-scikit-learn
-numpy
-scipy
-pandas
-matplotlib
-seaborn
+python==3.11
+numpy==2.1.0
+matplotlib==3.10.1
+scipy==1.15.2
+seaborn==0.13.2
+pandas==2.2.3
+xgboost==3.0.0
+scikit-learn==1.6.1
+shap==0.47.1
+plotly==5.11.0
