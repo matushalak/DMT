@@ -42,18 +42,18 @@ if __name__ == "__main__":
     imputation = "mean_mode"
     df = pd.read_csv(f'tables/preprocessed/{dataset_name}.csv')
 
-    do_hyperparameter_tuning = True  # Set to True to enable tuning
+    do_hyperparameter_tuning = False  # Set to True to enable tuning
     
     
     # Default hyperparameters
     config = {
-        "seq_length": 5,
+        "seq_length": 7,
         "batch_size": 32,
-        "hidden_dim": 64,
+        "hidden_dim": 128,
         "num_layers": 2,
-        "learning_rate": 0.001,
+        "learning_rate": 0.0001,
         "dropout": 0.2,
-        "model_type": "LSTM",
+        "model_type": "SimpleRNN",  # Options: "LSTM", "GRU", "SimpleRNN"
         "num_epochs": 20,
         "transform_target": True,
         "scaler_type": "MinMaxScaler",
@@ -93,15 +93,15 @@ if __name__ == "__main__":
     if do_hyperparameter_tuning:
 
         param_grid = {
-            "seq_length": [3, 5, 7],
-            "batch_size": [16, 32, 64],
-            "hidden_dim": [32, 64, 128],
+            "seq_length": [7, 8, 9],
+            "batch_size": [32],
+            "hidden_dim": [64, 128, 256],
             "num_layers": [1, 2],
             "learning_rate": [0.0001, 0.001, 0.01],
             "dropout": [0.1, 0.2, 0.3],
-            "model_type": ["LSTM", "GRU", "SimpleRNN"],
-            "transform_target": [True, False],
-            "scaler_type": ["MinMaxScaler", "StandardScaler"],
+            "model_type": ["SimpleRNN"],
+            "transform_target": [True],
+            "scaler_type": ["MinMaxScaler"],
             "clip_gradients": [True],
             "max_grad_norm": [1.0]
         }
@@ -127,7 +127,6 @@ if __name__ == "__main__":
         dataset_name=dataset_name,
         imputation=imputation,
         dropped_vars=dropped_vars,
-        mps_device=mps_device
     )
     
     print("Final evaluation metrics:")

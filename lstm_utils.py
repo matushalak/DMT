@@ -240,6 +240,7 @@ def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_
     all_targets = np.concatenate(all_targets)
 
     # print mean sd, min max of predictions and targets
+    print("Predictions for", title)
     print("Predictions mean:", np.mean(all_predictions))
     print("Predictions sd:", np.std(all_predictions))
     print("Predictions min:", np.min(all_predictions))
@@ -255,6 +256,10 @@ def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_
         if scaler_type == "StandardScaler":
             print("Target scaler mean:", target_scaler.mean_)
             print("Target scaler scale:", target_scaler.scale_)
+            print("Inverse transforming predictions and targets using StandardScaler")
+        else:
+            print("Inverse transforming predictions and targets using MinMaxScaler")
+
         all_predictions = target_scaler.inverse_transform(all_predictions)
         all_targets = target_scaler.inverse_transform(all_targets.reshape(-1, 1))
     
@@ -556,16 +561,8 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
     Returns:
         Dictionary of evaluation metrics
     """
-    import sys
-    import os
-    import time
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import torch
-    from torch import nn
-    import torch.optim as optim
-    from torch.utils.data import DataLoader
-    
+
+
     # Extract hyperparameters from config
     seq_length = config["seq_length"]
     batch_size = config["batch_size"]
