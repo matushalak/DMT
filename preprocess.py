@@ -3,25 +3,48 @@ import pandas as pd
 import numpy as np
 import os
 from typing import Literal
+import impute as IMP
 
 # --------- Preprocess pipeline -----------
 def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
-                        load_from_file: bool = False) -> pd.DataFrame:
+                        load_from_file: bool = False,
+                        method: Literal['date', 'time_of_day', 'both'] = 'both',
+                        remove_no_mood: bool = True) -> pd.DataFrame:
     '''
     Main preprocessing function to be used elsewhere
     '''
+    ### 1) BASIC PREPROCESSING
     # add weekday, hour, month
     data: pd.DataFrame = preprocess_df(filename)
+
+    # drop negative values for screentime variables
+    data = find_negative_values_OG_FAST(data, drop = True)
     
-    # daily / 3 times of day / both pivot and remove days without mood
-    data = create_pivot(data, method='both', remove_no_mood= True, 
+    # daily / 3 times of day / both pivot and remove days without mood 
+    # also saves the dataframe
+    data = create_pivot(data, method=method, remove_no_mood= remove_no_mood, 
                         load_from_file=load_from_file)
-    print('basic preprocessing done!')
+    print('Basic preprocessing done!')
+    ### 2) IMPUTATIONS
+    # get categories of variables for different imputations
+    imput_categories = IMP.categories(data.columns)
+    
+    # perform all imputations
+    data = IMP.imputations(imput_categories, data) 
+    print('Imputations complete!')
+    
+    ### 3) FEATURE ENGINEERING
+    # data = engineer_features(data)
+
+    ### 4) add target and crop last day for each participant without target
+    data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
+                               name = method) # saves the DF if name provided
+    print('Added features!')
     
     return data
 
 # -------------- Preprocessing functions ------------------
-def preprocess_df(filename: str
+def preprocess_df(filename: str = 'dataset_mood_smartphone.csv'
                   ) -> pd.DataFrame:
     '''
     Very first preprocessing function
@@ -31,11 +54,10 @@ def preprocess_df(filename: str
     data["id_num"] = data["id"].apply(lambda x: int(x.split(".")[1]))
     data["time"] = pd.to_datetime(data["time"])
     # extract useful information about date time
-    data['month'] = data['time'].dt.month
     data['date'] = data['time'].dt.date
-    data['weekday'] = data['time'].dt.weekday
     data['hour'] = data['time'].dt.hour
-    times_of_day =  np.digitize(data['hour'], [7, 17]) # 0 night / 1 day / 2 evening
+    times_of_day =  np.digitize(data['hour'], 
+                                [10, 17]) # 0 night & morning / 1 work day / 2 evening
     data['time_of_day'] = times_of_day
 
     return data
@@ -61,11 +83,16 @@ def create_pivot(df: pd.DataFrame,
     """
     # makes it faster
     if load_from_file:
-        return pd.read_csv(f"tables/pivot_tables_daily/daily_pivot_table_{method}.csv", index_col=0)
+        return pd.read_csv(f"tables/pivot_tables_daily/daily_pivot_table_{method}.csv")
     
     # for all participants
     pivot_list = []
     participants = df['id_num'].unique()
+
+    # for wake and bed times, see 1 day as between 5AM and 5AM the next day
+    df["time"] = pd.to_datetime(df["time"])
+    df["shifted_time"] = df["time"] - pd.Timedelta(hours=5)
+    df["shifted_date"] = df["shifted_time"].dt.date
 
     # Process each participant separately
     for part in participants:
@@ -75,10 +102,9 @@ def create_pivot(df: pd.DataFrame,
         # on daily AND time of day level
         mean_agg = ["mood", "circumplex.valence", "circumplex.arousal"] # not sure about activity
         # only DAILY
-        # TODO: sliding window!!!
         std_agg = ["mood", "circumplex.valence", "circumplex.arousal"] # variance 
         # only DAILY
-        sum_agg = [col for col in df_part["variable"].unique() if col not in mean_agg + ["id_num", "time", "date"]]
+        sum_agg = [col for col in df_part["variable"].unique() if col not in mean_agg + ["id_num", "time", "date", "month", "weekday"]]
         # also select min, max - on day level AND time of day level
         max_agg = ["activity", "circumplex.valence", "circumplex.arousal", "mood"]
         min_agg = ["circumplex.valence", "circumplex.arousal", "mood"]
@@ -100,10 +126,20 @@ def create_pivot(df: pd.DataFrame,
         # Also create a DataFrame version of the full grid
         all_df = pd.DataFrame(list(full_index), columns=['date','time_of_day'])
         
+        # get wakeup and sleep times
+        # exclude variables which do not fluctuate throughout the day (activity)
+        exclude = ['activity']
+        df_TIMES = df_part.copy()
+        df_TIMES.drop(df_TIMES[df_TIMES['variable'].isin(exclude)].index, inplace = True)
+        daily_times = df_TIMES.groupby("shifted_date").agg(
+                        bed_time_last_daily=("hour", get_bed_time),
+                        wakeup_time_first_daily=("hour", get_wakeup_time)
+                    ).reset_index()      
+        
         for aggregation, var_combs in zip(aggs, var_lists):
             df_agg = df_part[df_part["variable"].isin(var_combs)].copy()
             # sliding window std
-            if aggregation == 'std.slide':                
+            if aggregation == 'std.slide':
                 # Use sliding_std_df as your daily pivot
                 pivot_part_daily = sliding_std(full_range, aggregation, var_combs, df_agg)
                 
@@ -115,13 +151,20 @@ def create_pivot(df: pd.DataFrame,
                 pivot_part_daily = pivot_part_daily.add_suffix(f'_{aggregation}_daily')
 
             # NOTE: For sum aggregations NaN = 0
-            if aggregation == 'sum':
-                pivot_part_daily = pivot_part_daily.fillna(0)
+            # if aggregation == 'sum':
+            #     pivot_part_daily = pivot_part_daily.fillna(0)
             
             # Make sure the daily pivot index is datetime and reset_index for merging:
             pivot_part_daily = pivot_part_daily.reindex(full_range)
             pivot_part_daily.index.name = "date"
             daily_reset = pivot_part_daily.reset_index()
+
+            # only need to do this once
+            if aggregation == 'last':
+                # Merge in the daily meta features (bed_time and wakeup_time)
+                daily_reset["date"] = pd.to_datetime(daily_reset["date"])
+                daily_times["date"] = pd.to_datetime(daily_times["shifted_date"])
+                daily_reset = daily_reset.merge(daily_times, on="date", how="left")
     
             if method == 'both':
                 if aggregation in dailyOnly:
@@ -146,6 +189,18 @@ def create_pivot(df: pd.DataFrame,
             
             elif method == 'date':
                 pivot_agg = pivot_part_daily
+                if aggregation == 'last':
+                    # add sleep info
+                    # Reset the index so that "date" becomes a column
+                    pivot_agg = pivot_agg.reset_index()
+                    # Merge the sleep info from daily_reset (which has one row per date)
+                    pivot_agg = pivot_agg.merge(
+                        daily_reset[['date', 'wakeup_time_first_daily', 'bed_time_last_daily']], 
+                        on='date', how='left'
+                    )
+                    # Set the index back to 'date' 
+                    pivot_agg = pivot_agg.set_index('date')
+
                 # Create a complete date range from the earliest to the latest day for this participant
                 pivot_agg = pivot_agg.reindex(full_range)
                 pivot_agg.index.name = "date"
@@ -190,6 +245,20 @@ def create_pivot(df: pd.DataFrame,
     if remove_no_mood:
         combined = remove_dates_without_VAR(combined, VAR = 'mood_mean_daily')
 
+    # rename columns
+    combined.rename(columns={
+        'wakeup_time_first_daily':'wake_time',
+        'bed_time_last_daily': 'bed_time',
+        'month_first_daily' : 'month',
+        'weekday_first_daily' : 'weekday'}, inplace=True)
+    
+    # fill nans for month and weekday
+    combined['date'] = pd.to_datetime(combined['date'])
+    combined['month'] = combined['date'].dt.month
+    combined['weekday'] = combined['date'].dt.weekday
+    combined.insert(2, "month", combined.pop('month'))
+    combined.insert(3, "weekday", combined.pop('weekday'))
+    
     # save the combined dataframe to a csv file
     if not os.path.exists("tables/pivot_tables_daily"):
         os.makedirs("tables/pivot_tables_daily")
@@ -225,6 +294,48 @@ def remove_dates_without_VAR(df: pd.DataFrame, VAR: str, start_date=None, end_da
     return df
 
 
+def find_negative_values_OG_FAST(df, drop=False):
+    '''
+    removes negative values
+    '''
+    exclude_variables = ["circumplex.valence", "circumplex.arousal"]
+    # Create a boolean mask for rows with negative 'value' that are NOT in exclude_variables.
+    mask = (df["value"] < 0) & (~df["variable"].isin(exclude_variables))
+    if drop:
+        df = df.loc[~mask]
+        return df
+    
+    else: # for exploration
+        negatives = df.loc[mask]
+        for row in negatives.itertuples():
+            print(f"Negative value found: {row.value} for variable {row.variable} at time {row.time}")
+            print(f"Participant: {row.id_num}, Day: {row.time}")
+
+
+def add_next_day_values(df, shift: int = -3, name : str | None = None):
+    """
+    modified from @urbansirca
+    Add next day values into next_day_mood column
+    """
+    # create a new column with the next day mood
+    df["next_day_mood"] = df.groupby("id_num")["mood_mean_daily"].shift(shift)
+    # create a new column with the next day date
+    df["next_day"] = df.groupby("id_num")["date"].shift(shift)
+
+    # target right before mood_mean_daily position
+    df.insert(5, "target", df.pop("next_day_mood"))
+    df.insert(2, "next_date", df.pop("next_day"))
+    # drop last day without target for each participant
+    df = df.dropna(subset=['target', 'next_date'])
+    
+    if name is not None:
+        # save the combined dataframe to a csv file
+        if not os.path.exists(impdir := "tables/imputed"):
+            os.makedirs(impdir)
+        df.to_csv(os.path.join(impdir, f"df_ready_{name}.csv"), index=False)
+    return df
+
+# ------------- Early feature engineering functions -----------÷÷
 def sliding_std(full_range, aggregation, var_combs, df_agg) -> pd.DataFrame:
     # For a sliding window std, create an empty DataFrame indexed by the full date range.
     sliding_std_df = pd.DataFrame(index=full_range)
@@ -255,8 +366,34 @@ def sliding_std(full_range, aggregation, var_combs, df_agg) -> pd.DataFrame:
         sliding_std_df[col_name] = std_values
     
     return sliding_std_df
-    
 
+
+# Define functions for bedtime and wakeup time within specific windows.
+def get_bed_time(h):
+    # - times >= 19 are kept as is (e.g. 19,20,...,23)
+    h_late = h[h >= 18]                  # late evening values (unchanged)
+    # - times < 5 are adjusted by adding 24 (so 3 becomes 27)
+    h_early = h[h < 5].copy()              # early morning values
+    h_early_adjusted = h_early + 24       # shift these by 24
+    # Combine both series
+    combined = h_late._append(h_early_adjusted)
+    if not combined.empty:
+        max_val = combined.max()
+        # Convert back: if max_val is 24 or more, subtract 24.
+        if max_val >= 24:
+            return max_val - 24
+        else:
+            return max_val
+    else:
+        return np.nan
+    
+def get_wakeup_time(h):
+    # Consider only times in the wakeup window (e.g., 4:00 to 15:00)
+    h = h[(h >= 5) & (h < 13)]
+    return h.min() if not h.empty else np.nan
+
+
+# ------------ utils ------------
 # NOTE: feel free to change ordering
 def sort_pivot_columns(cols):
     """
@@ -282,7 +419,7 @@ def sort_pivot_columns(cols):
     
     # Define your desired base variable order. For apps, we group any variable
     # that starts with "appCat" into the "appCat" group.
-    base_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal", "call", "sms", "appCat"]
+    base_order = ["mood", "screen", "activity", "circumplex.valence", "circumplex.arousal", "wakeup_time", "bed_time", "call", "sms", "appCat"]
     
     # Define aggregation orders.
     non_sum_order = ["mean", "std", "std.slide", "max", "min", "first", "last"]
@@ -343,4 +480,4 @@ def sort_pivot_columns(cols):
 
 
 if __name__ == '__main__':
-    preprocess_pipeline()
+    preprocess_pipeline(method='both')
