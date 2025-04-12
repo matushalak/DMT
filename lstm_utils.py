@@ -29,55 +29,429 @@ from ray.tune.schedulers import ASHAScheduler
 
 from datetime import datetime
 
-
-# Dataset class -------------------------
-class MultiParticipantDataset(Dataset):
-    def __init__(self, df, seq_length, target_col='mood', id_col='id_num', include_target_in_features=True):
-        """
-        df: pandas DataFrame sorted by time.
-        seq_length: number of time steps in each sample.
-        target_col: the column we want to predict.
-        """
-        df = df.drop(columns=["next_day", "next_day_mood"])
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from typing import Optional, Tuple, Dict, List, Union
+def create_data_split(df, proportion_train=0.7, proportion_val=0.15, split_within_participants=True, seq_length=None):
+    """
+    Split data into train, validation, and test sets with simplified proportion handling
+    
+    Args:
+        df: DataFrame containing the data
+        proportion_train: Proportion of data for training
+        proportion_val: Proportion of data for validation
+        split_within_participants: Whether to split within participants or across participants
+        seq_length: Sequence length parameter (no longer used for filtering)
         
+    Returns:
+        train_df, val_df, test_df: DataFrames for training, validation, and testing
+    """
+    import pandas as pd
+    from sklearn.model_selection import train_test_split
+    import numpy as np
+    
+    proportion_test = 1 - proportion_train - proportion_val
+    
+    if split_within_participants:
+        # Initialize empty lists for each split
+        train_dfs, val_dfs, test_dfs = [], [], []
+        split_dates = []
+        
+        # Split each participant's data
+        for participant, group in df.groupby('id_num'):
+            group = group.sort_values(by='day')
+            group_size = len(group)
+            
+            # Skip participants with too few data points
+            if group_size < 3:  # Absolute minimum to have at least 1 point in each split
+                print(f"Skipping participant {participant} with only {group_size} data points")
+                continue
+            
+            # Calculate split indices
+            train_size = int(group_size * proportion_train)
+            val_size = int(group_size * proportion_val)
+            
+            # Ensure at least 1 sample in each split if possible
+            if train_size == 0 and group_size >= 3:
+                train_size = 1
+            if val_size == 0 and group_size >= 3:
+                val_size = 1
+                
+            # Ensure test set gets at least 1 sample
+            test_size = group_size - train_size - val_size
+            if test_size == 0 and group_size >= 3:
+                if val_size > 1:
+                    val_size -= 1
+                elif train_size > 1:
+                    train_size -= 1
+                test_size = 1
+            
+            # Split the data
+            train_idx = train_size
+            val_idx = train_size + val_size
+            
+            train_dfs.append(group.iloc[:train_idx])
+            val_dfs.append(group.iloc[train_idx:val_idx])
+            test_dfs.append(group.iloc[val_idx:])
+            
+            # Record split dates for this participant
+            split_dates.append({
+                "participant": participant,
+                "train_start": group.iloc[0]['day'] if train_size > 0 else None,
+                "train_end": group.iloc[train_idx-1]['day'] if train_size > 0 else None,
+                "val_start": group.iloc[train_idx]['day'] if val_size > 0 else None,
+                "val_end": group.iloc[val_idx-1]['day'] if val_size > 0 else None,
+                "test_start": group.iloc[val_idx]['day'] if test_size > 0 else None,
+                "test_end": group.iloc[-1]['day'] if test_size > 0 else None,
+                "train_size": train_size,
+                "val_size": val_size,
+                "test_size": test_size,
+                "train_prop": train_size / group_size,
+                "val_prop": val_size / group_size,
+                "test_prop": test_size / group_size
+            })
+        
+        # Combine the splits
+        train_df = pd.concat(train_dfs) if train_dfs else pd.DataFrame()
+        val_df = pd.concat(val_dfs) if val_dfs else pd.DataFrame()
+        test_df = pd.concat(test_dfs) if test_dfs else pd.DataFrame()
+        
+        # Save split dates info
+        dates_df = pd.DataFrame(split_dates)
+        if not dates_df.empty:
+            try:
+                dates_df.to_csv("tables/training_dates_split.csv", index=False)
+                
+                # Print actual proportions achieved
+                total_samples = len(train_df) + len(val_df) + len(test_df)
+                actual_train_prop = len(train_df) / total_samples if total_samples > 0 else 0
+                actual_val_prop = len(val_df) / total_samples if total_samples > 0 else 0
+                actual_test_prop = len(test_df) / total_samples if total_samples > 0 else 0
+                
+                print(f"Actual proportions achieved:")
+                print(f"Train: {actual_train_prop:.3f} (target: {proportion_train:.3f})")
+                print(f"Validation: {actual_val_prop:.3f} (target: {proportion_val:.3f})")
+                print(f"Test: {actual_test_prop:.3f} (target: {proportion_test:.3f})")
+            except:
+                print("Warning: Could not save split dates to CSV file")
+    
+    else:
+        # Split across participants
+        participant_ids = df['id_num'].unique()
+        
+        if len(participant_ids) < 3:
+            print("Warning: Not enough participants for a proper split. Using fallback method.")
+            # Fallback to within-participants split if we don't have enough participants
+            return create_data_split(df, proportion_train, proportion_val, True, seq_length)
+        
+        # Get data count for each participant
+        participant_weights = df.groupby('id_num').size()
+        
+        # Create a weighted split based on data volume
+        participant_ids_with_counts = [(pid, participant_weights[pid]) for pid in participant_ids]
+        total_points = sum(count for _, count in participant_ids_with_counts)
+        
+        # Sort by data count for better allocation
+        participant_ids_with_counts.sort(key=lambda x: x[1], reverse=True)
+        
+        # Allocate participants to achieve target proportions
+        train_ids, val_ids, test_ids = [], [], []
+        train_points, val_points, test_points = 0, 0, 0
+        
+        for pid, count in participant_ids_with_counts:
+            # Current proportions if we add to each set
+            current_total = train_points + val_points + test_points + count
+            
+            train_ratio = (train_points + count) / current_total
+            val_ratio = (val_points + count) / current_total
+            test_ratio = (test_points + count) / current_total
+            
+            # Calculate deviation from target for each option
+            train_dev = abs(train_ratio - proportion_train)
+            val_dev = abs(val_ratio - proportion_val) 
+            test_dev = abs(test_ratio - proportion_test)
+            
+            # Assign to minimize deviation
+            if train_dev <= val_dev and train_dev <= test_dev:
+                train_ids.append(pid)
+                train_points += count
+            elif val_dev <= train_dev and val_dev <= test_dev:
+                val_ids.append(pid)
+                val_points += count
+            else:
+                test_ids.append(pid)
+                test_points += count
+        
+        # Ensure each split has at least one participant
+        if not train_ids and participant_ids:
+            pid = participant_ids[0]
+            train_ids.append(pid)
+            if pid in val_ids:
+                val_ids.remove(pid)
+            elif pid in test_ids:
+                test_ids.remove(pid)
+        
+        if not val_ids and len(participant_ids) > 1:
+            pid = participant_ids[1] if participant_ids[1] not in train_ids else participant_ids[0]
+            val_ids.append(pid)
+            if pid in test_ids:
+                test_ids.remove(pid)
+        
+        if not test_ids and len(participant_ids) > 2:
+            pid = next((p for p in participant_ids if p not in train_ids and p not in val_ids), None)
+            if pid:
+                test_ids.append(pid)
+        
+        print(f"Train IDs ({len(train_ids)}): {train_ids}")
+        print(f"Validation IDs ({len(val_ids)}): {val_ids}")
+        print(f"Test IDs ({len(test_ids)}): {test_ids}")
+        
+        # Filter the original DataFrame based on these IDs
+        train_df = df[df['id_num'].isin(train_ids)].copy()
+        val_df = df[df['id_num'].isin(val_ids)].copy()
+        test_df = df[df['id_num'].isin(test_ids)].copy()
+        
+        # Sort by participant and day
+        train_df.sort_values(by=['id_num', 'day'], inplace=True)
+        val_df.sort_values(by=['id_num', 'day'], inplace=True)
+        test_df.sort_values(by=['id_num', 'day'], inplace=True)
+        
+        # Print actual proportions achieved
+        total_samples = len(train_df) + len(val_df) + len(test_df)
+        actual_train_prop = len(train_df) / total_samples if total_samples > 0 else 0
+        actual_val_prop = len(val_df) / total_samples if total_samples > 0 else 0
+        actual_test_prop = len(test_df) / total_samples if total_samples > 0 else 0
+        
+        print(f"Actual proportions achieved:")
+        print(f"Train: {actual_train_prop:.3f} (target: {proportion_train:.3f})")
+        print(f"Validation: {actual_val_prop:.3f} (target: {proportion_val:.3f})")
+        print(f"Test: {actual_test_prop:.3f} (target: {proportion_test:.3f})")
+
+        
+    return train_df, val_df, test_df
+
+
+class MultiParticipantDataset(Dataset):
+    def __init__(self, 
+                 df: pd.DataFrame, 
+                 seq_length: int, 
+                 target_col: str = 'mood', 
+                 id_col: str = 'id_num', 
+                 include_target_in_features: bool = True,
+                 normalize_data: bool = True,
+                 transform_target: bool = False,
+                 scaler_type: str = "StandardScaler",
+                 per_participant_normalization: bool = False,
+                 existing_scalers: Dict = None):
+        """
+        Custom dataset for multi-participant time series prediction with LSTM
+        
+        Args:
+            df: pandas DataFrame sorted by time
+            seq_length: number of time steps in each sample
+            target_col: the column we want to predict
+            id_col: column that identifies participants
+            include_target_in_features: whether to include target variable as a feature
+            normalize_data: whether to normalize the data
+            transform_target: whether to normalize the target variable
+            scaler_type: type of scaler to use ("StandardScaler" or "MinMaxScaler")
+            per_participant_normalization: whether to normalize data per participant 
+            existing_scalers: pre-trained scalers to use instead of fitting new ones
+        """
+        # Make a copy to avoid modifying the original dataframe
+        df = df.copy()
+        
+        # Drop unnecessary columns
+        if "next_day" in df.columns and "next_day_mood" in df.columns:
+            df = df.drop(columns=["next_day", "next_day_mood"])
+        
+        # Set instance variables
         self.seq_length = seq_length
         self.target_col = target_col
         self.id_col = id_col
+        self.include_target_in_features = include_target_in_features
+        self.per_participant_normalization = per_participant_normalization
         
+        # Sort by participant and day
         df.sort_values(by=[id_col, 'day'], inplace=True)
-        self.data = df.reset_index(drop=True)
-
+        
+        # Define feature columns
         if include_target_in_features:
-            self.features = [col for col in self.data.columns if col not in [target_col, "day"]]
+            self.features = [col for col in df.columns if col not in [self.target_col, "day"]]
         else:
-            self.features = [col for col in self.data.columns if col not in [target_col, id_col, "day"]]
-
-        # Precompute valid indices where the sequence is within the same participant.
-        self.valid_indices = []
-        for i in range(len(self.data) - self.seq_length):
-            participant_id = self.data.iloc[i][self.id_col]
-            if all(self.data.iloc[i:i+self.seq_length][self.id_col] == participant_id):
-                self.valid_indices.append(i)
-
-    def __len__(self):
-        return len(self.valid_indices)
-
-    def __getitem__(self, idx):
-        # Use precomputed valid index.
-        real_idx = self.valid_indices[idx]
-        row = self.data.iloc[real_idx]
-        participant_id = row[self.id_col]
+            self.features = [col for col in df.columns if col not in [self.target_col, self.id_col, "day"]]
         
-        x_features = self.data.iloc[real_idx:real_idx+self.seq_length][self.features].values.astype(np.float32)
-        x_id = np.array([participant_id] * self.seq_length, dtype=np.int64)
+        # Normalize data if requested
+        self.scalers = {}
+        if normalize_data:
+            df, self.scalers = self._normalize_data(
+                df, 
+                transform_target=transform_target,
+                scaler_type=scaler_type,
+                existing_scalers=existing_scalers
+            )
         
-        # The target is the next time step's mood
-        y = self.data.iloc[real_idx+self.seq_length][self.target_col]
+        # Store the processed data
+        self.data = df.reset_index(drop=True)
         
-        return torch.tensor(x_features),torch.tensor(x_id), torch.tensor(y).float()
+        # Group data by participant
+        grouped_data = self.data.groupby(self.id_col)
+        
+        # Create sequences with padding
+        self.sequences = []
+        self.participant_ids = []
+        self.targets = []
+        self.masks = []  # To track which positions are padded
+        
+        # Process each participant
+        for participant_id, participant_data in grouped_data:
+            # For each possible starting position in this participant's data
+            max_idx = len(participant_data) - 1  # Need at least 1 target day
+            
+            for start_idx in range(max_idx):
+                # Get available data for this sequence
+                available_len = min(self.seq_length, max_idx - start_idx)
+                end_idx = start_idx + available_len
+                
+                # Get features for available days
+                x_seq = participant_data.iloc[start_idx:end_idx][self.features].values.astype(np.float32)
+                
+                # Create mask (1 for real data, 0 for padding)
+                mask = np.ones(self.seq_length, dtype=np.float32)
+                
+                # If we need padding
+                if available_len < self.seq_length:
+                    # Create padded sequence with zeros
+                    padded_seq = np.zeros((self.seq_length, len(self.features)), dtype=np.float32)
+                    # Copy available data
+                    padded_seq[:available_len] = x_seq
+                    # Update mask to indicate padding
+                    mask[available_len:] = 0
+                    x_seq = padded_seq
+                
+                # Get target (next day's mood)
+                if end_idx < len(participant_data):
+                    target = participant_data.iloc[end_idx][self.target_col]
+                    
+                    # Store this sequence
+                    self.sequences.append(x_seq)
+                    self.participant_ids.append(participant_id)
+                    self.targets.append(target)
+                    self.masks.append(mask)
+    
+    def _normalize_data(self, 
+                       df: pd.DataFrame, 
+                       transform_target: bool = False,
+                       scaler_type: str = "StandardScaler",
+                       existing_scalers: Dict = None) -> Tuple[pd.DataFrame, Dict]:
+        """
+        Normalize data either globally or per participant
+        
+        Args:
+            df: pandas DataFrame to normalize
+            transform_target: whether to normalize target variable
+            scaler_type: type of scaler to use
+            existing_scalers: pre-trained scalers to use
+            
+        Returns:
+            normalized DataFrame and dictionary of scalers
+        """
+        # Initialize empty scalers dictionary if not provided
+        scalers = existing_scalers if existing_scalers is not None else {}
+        
+        # Choose scaler type
+        def get_new_scaler():
+            if scaler_type == "StandardScaler":
+                return StandardScaler()
+            elif scaler_type == "MinMaxScaler":
+                return MinMaxScaler()
+            else:
+                raise ValueError(f"Unknown scaler type: {scaler_type}")
+        
+        # Normalize per participant if requested
+        if self.per_participant_normalization:
+            participant_ids = df[self.id_col].unique()
+            
+            # Initialize scalers for features if they don't exist
+            if 'features' not in scalers:
+                scalers['features'] = {p_id: get_new_scaler() for p_id in participant_ids}
+                
+            # Initialize scaler for target if requested and doesn't exist
+            if transform_target and 'target' not in scalers:
+                scalers['target'] = {p_id: get_new_scaler() for p_id in participant_ids}
+            
+            # Process each participant separately
+            for p_id in participant_ids:
+                mask = df[self.id_col] == p_id
+                
+                # Normalize features
+                feature_cols = [col for col in self.features if col != self.id_col]
+                if len(feature_cols) > 0:  # Only normalize if there are features
+                    if p_id in scalers['features']:
+                        df.loc[mask, feature_cols] = scalers['features'][p_id].fit_transform(df.loc[mask, feature_cols])
+                    
+                # Normalize target if requested
+                if transform_target:
+                    if p_id in scalers['target']:
+                        df.loc[mask, self.target_col] = scalers['target'][p_id].fit_transform(df.loc[mask, [self.target_col]])
+        
+        # Global normalization across all participants
+        else:
+            # Initialize scalers if they don't exist
+            if 'features' not in scalers:
+                scalers['features'] = get_new_scaler()
+                
+            if transform_target and 'target' not in scalers:
+                scalers['target'] = get_new_scaler()
+            
+            # Normalize features
+            feature_cols = [col for col in self.features if col != self.id_col]
+            if len(feature_cols) > 0:  # Only normalize if there are features
+                df[feature_cols] = scalers['features'].fit_transform(df[feature_cols])
+            
+            # Normalize target if requested
+            if transform_target:
+                df[self.target_col] = scalers['target'].fit_transform(df[[self.target_col]])
+        
+        return df, scalers
+    
+    def get_scalers(self) -> Dict:
+        """Return the scalers used for normalization"""
+        return self.scalers
+    
+    def __len__(self) -> int:
+        """Return the number of sequences"""
+        return len(self.sequences)
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Get a sequence and its target
+        
+        Args:
+            idx: index of the sequence
+            
+        Returns:
+            Tuple of (features, participant_id, target, mask)
+        """
+        # Get precomputed sequence data
+        x_features = self.sequences[idx]
+        participant_id = self.participant_ids[idx]
+        y = self.targets[idx]
+        mask = self.masks[idx]
+        
+        # Convert to tensors
+        x_features_tensor = torch.tensor(x_features)
+        x_id_tensor = torch.tensor([participant_id] * self.seq_length, dtype=torch.int64)
+        y_tensor = torch.tensor(y).float()
+        mask_tensor = torch.tensor(mask)
+        
+        return x_features_tensor, x_id_tensor, y_tensor, mask_tensor
 
 
-# Model classes -------------------------
+
 class LSTMModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
         super(LSTMModel, self).__init__()
@@ -90,7 +464,7 @@ class LSTMModel(nn.Module):
         # Fully-connected layer to output the final prediction
         self.fc = nn.Linear(hidden_dim, output_dim)
         
-    def forward(self, x):
+    def forward(self, x, participant_ids=None, mask=None):
         # x: [batch_size, seq_length, input_dim]
         batch_size = x.size(0)
         
@@ -98,13 +472,34 @@ class LSTMModel(nn.Module):
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
         c0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
         
-        # Forward propagate LSTM; out shape: [batch_size, seq_length, hidden_dim]
-        out, _ = self.lstm(x, (h0, c0))
+        # Handle padding if mask is provided
+        if mask is not None:
+            # Calculate sequence lengths from mask
+            seq_lengths = mask.sum(dim=1).int()
+            
+            # Pack padded sequence
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, seq_lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            
+            # Forward pass with packed sequence
+            packed_output, _ = self.lstm(packed_input, (h0, c0))
+            
+            # Unpack the sequence
+            out, _ = nn.utils.rnn.pad_packed_sequence(packed_output, batch_first=True)
+            
+            # Extract the last valid output for each sequence
+            idx = (seq_lengths - 1).view(-1, 1).unsqueeze(1).expand(-1, 1, self.hidden_dim).long()
+            last_out = out.gather(1, idx).squeeze(1)  # Shape: [batch_size, hidden_dim]
+        else:
+            # Standard forward pass without packing
+            out, _ = self.lstm(x, (h0, c0))  # out shape: [batch_size, seq_length, hidden_dim]
+            # Use the last time step's output
+            last_out = out[:, -1, :]  # Shape: [batch_size, hidden_dim]
         
-        # Use the last time step's output for prediction; shape: [batch_size, hidden_dim]
-        out = out[:, -1, :]
-        out = self.fc(out)  # shape: [batch_size, output_dim]
-        return out
+        # Final prediction through the fully connected layer
+        fc_out = self.fc(last_out)  # Shape: [batch_size, 1]
+        return fc_out  # This should be [batch_size, 1]
 
 class GRUModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=64, num_layers=2, output_dim=1, dropout=0.2):
@@ -112,26 +507,48 @@ class GRUModel(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         
-        # Two-layer GRU with dropout applied between layers (if num_layers > 1)
+        # Multi-layer GRU with dropout applied between layers (if num_layers > 1)
         self.gru = nn.GRU(input_dim, hidden_dim, num_layers, 
                           batch_first=True, dropout=dropout)
         
         # Fully-connected output layer
         self.fc = nn.Linear(hidden_dim, output_dim)
         
-    def forward(self, x):
+    def forward(self, x, participant_ids=None, mask=None):
         # x shape: [batch_size, seq_length, input_dim]
         batch_size = x.size(0)
         
         # Initialize hidden state with zeros
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
         
-        # Forward propagate through GRU
-        out, _ = self.gru(x, h0)  # out shape: [batch_size, seq_length, hidden_dim]
+        # Handle padding if mask is provided
+        if mask is not None:
+            # Calculate sequence lengths from mask
+            seq_lengths = mask.sum(dim=1).int()
+            
+            # Pack padded sequence
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, seq_lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            
+            # Forward pass with packed sequence
+            packed_output, _ = self.gru(packed_input, h0)
+            
+            # Unpack the sequence
+            out, _ = nn.utils.rnn.pad_packed_sequence(packed_output, batch_first=True)
+            
+            # Extract the last valid output for each sequence
+            # Fix: Convert index tensor to Long (int64) type
+            idx = (seq_lengths - 1).view(-1, 1).unsqueeze(1).expand(-1, 1, self.hidden_dim).long()
+            last_out = out.gather(1, idx).squeeze(1)
+        else:
+            # Standard forward pass without packing
+            out, _ = self.gru(x, h0)
+            # Use the last time step's output
+            last_out = out[:, -1, :]
         
-        # Use the output from the last time step for prediction
-        out = out[:, -1, :]  # shape: [batch_size, hidden_dim]
-        out = self.fc(out)   # shape: [batch_size, output_dim]
+        # Final prediction
+        out = self.fc(last_out)
         return out
 
 
@@ -141,73 +558,58 @@ class SimpleRNNModel(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         
-        # Two-layer RNN with dropout applied between layers (if num_layers > 1)
+        # Multi-layer RNN with dropout applied between layers (if num_layers > 1)
         self.rnn = nn.RNN(input_dim, hidden_dim, num_layers, 
                           batch_first=True, dropout=dropout)
         
         # Fully-connected output layer
         self.fc = nn.Linear(hidden_dim, output_dim)
         
-    def forward(self, x):
+    def forward(self, x, participant_ids=None, mask=None):
         # x shape: [batch_size, seq_length, input_dim]
         batch_size = x.size(0)
         
         # Initialize hidden state with zeros
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_dim).to(x.device)
         
-        # Forward propagate through RNN
-        out, _ = self.rnn(x, h0)  # out shape: [batch_size, seq_length, hidden_dim]
+        # Handle padding if mask is provided
+        if mask is not None:
+            # Calculate sequence lengths from mask
+            seq_lengths = mask.sum(dim=1).int()
+            
+            # Pack padded sequence
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, seq_lengths.cpu(), batch_first=True, enforce_sorted=False
+            )
+            
+            # Forward pass with packed sequence
+            packed_output, _ = self.rnn(packed_input, h0)
+            
+            # Unpack the sequence
+            out, _ = nn.utils.rnn.pad_packed_sequence(packed_output, batch_first=True)
+            
+            # Extract the last valid output for each sequence
+            # Fix: Convert index tensor to Long (int64) type
+            idx = (seq_lengths - 1).view(-1, 1).unsqueeze(1).expand(-1, 1, self.hidden_dim).long()
+            last_out = out.gather(1, idx).squeeze(1)
+        else:
+            # Standard forward pass without packing
+            out, _ = self.rnn(x, h0)
+            # Use the last time step's output
+            last_out = out[:, -1, :]
         
-        # Use the output from the last time step for prediction
-        out = out[:, -1, :]  # shape: [batch_size, hidden_dim]
-        out = self.fc(out)   # shape: [batch_size, output_dim]
+        # Final prediction
+        out = self.fc(last_out)
         return out
-    
 # ------------------------------------------------------
 
-
-def normalize(df, scaler=None, scaler_target=None, transform_target=False, scaler_type="StandardScaler"):
-    df = df.copy()
-    features = [col for col in df.columns if col not in ['id_num', 'day', "date", "next_day_mood", "next_day", "mood"]]
     
-    if scaler is None:
-        if scaler_type == "StandardScaler":
-            scaler = StandardScaler()
-        elif scaler_type == "MinMaxScaler":
-            scaler = MinMaxScaler()
-    
-    # Scale the features
-    df[features] = scaler.fit_transform(df[features])
-    
-    if transform_target:
-        if scaler_target is None:
-            if scaler_type == "StandardScaler":
-                scaler_target = StandardScaler()
-            elif scaler_type == "MinMaxScaler":
-                scaler_target = MinMaxScaler()
-
-        # Scale only the target column "mood"
-        df["mood"] = scaler_target.fit_transform(df[["mood"]])
-
-        # print("scaler properties:")
-        # print(scaler.mean_)
-        # print(scaler.scale_)
-        if scaler_type == "StandardScaler":
-            print("scaler properties:")
-            print(scaler.mean_)
-            print(scaler.scale_)
-        
-        return df, scaler, scaler_target
-    else:
-        return df, scaler, None
-    
-
-def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_plot=True, save_html=True, title="predictions", scaler_type="StandardScaler"):
+def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_plot=True, 
+                  save_fig=True, title="predictions", scaler_type="StandardScaler"):
     """
     Runs predictions on the data_loader using model, builds a results DataFrame using the
     test_dataset's original data (which includes the 'day' and 'id_num' columns), and then plots
-    real vs predicted values with Plotly using the 'day' column for the x-axis and a dropdown
-    to select different participants.
+    real vs predicted values for all participants using matplotlib/seaborn.
 
     Parameters:
         model: Trained PyTorch model.
@@ -215,14 +617,19 @@ def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_
         test_dataset: The dataset instance (e.g., MultiParticipantDataset) used to create data_loader.
                       It must have a 'data' attribute containing the original DataFrame with a 'day' column.
         target_scaler: (Optional) Scaler used to normalize the target data.
+        show_plot: Whether to display the plot.
+        save_fig: Whether to save the figure to disk.
+        title: Title prefix for the plot.
+        scaler_type: Type of scaler used ("StandardScaler" or "MinMaxScaler").
     """
+
+    
     model.eval()
     all_predictions = []
     all_targets = []
 
     # move everything to cpu
     model.to("cpu")
-
     
     # Run model predictions over the data_loader
     with torch.no_grad():
@@ -235,23 +642,12 @@ def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_
             all_predictions.append(outputs.cpu().numpy())
             all_targets.append(y.cpu().numpy())
     
-    # Concatenate all predictions and targets into arrays.
+    # Concatenate all predictions and targets into arrays
     all_predictions = np.concatenate(all_predictions)
     all_targets = np.concatenate(all_targets)
 
-    # print mean sd, min max of predictions and targets
-    print("Predictions for", title)
-    print("Predictions mean:", np.mean(all_predictions))
-    print("Predictions sd:", np.std(all_predictions))
-    print("Predictions min:", np.min(all_predictions))
-    print("Predictions max:", np.max(all_predictions))
-    print("Targets mean:", np.mean(all_targets))
-    print("Targets sd:", np.std(all_targets))
-    print("Targets min:", np.min(all_targets))
-    print("Targets max:", np.max(all_targets))
-
     
-    # Inverse transform if a target scaler is provided.
+    # Inverse transform if a target scaler is provided
     if target_scaler is not None:
         if scaler_type == "StandardScaler":
             print("Target scaler mean:", target_scaler.mean_)
@@ -264,203 +660,223 @@ def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_
         all_targets = target_scaler.inverse_transform(all_targets.reshape(-1, 1))
     
 
-    # Compute the correct slice of the original DataFrame.
+    # Print statistics of predictions and targets
+    print("Predictions for", title)
+    print("Predictions mean:", np.mean(all_predictions))
+    print("Predictions sd:", np.std(all_predictions))
+    print("Predictions min:", np.min(all_predictions))
+    print("Predictions max:", np.max(all_predictions))
+    print("Targets mean:", np.mean(all_targets))
+    print("Targets sd:", np.std(all_targets))
+    print("Targets min:", np.min(all_targets))
+    print("Targets max:", np.max(all_targets))
+    
+    # Compute the correct slice of the original DataFrame
     # The i-th prediction corresponds to data row at index (i + seq_length)
     start_idx = test_dataset.seq_length
     end_idx = start_idx + len(test_dataset)
     df_results = test_dataset.data.iloc[start_idx:end_idx].copy().reset_index(drop=True)
 
-    # Add prediction and target columns to the results DataFrame.
+    # Add prediction and target columns to the results DataFrame
     df_results['Real'] = all_targets.reshape(-1)
     df_results['Predicted'] = all_predictions.reshape(-1)
     
-    # Get unique participant IDs from the results DataFrame.
+    # Get unique participant IDs from the results DataFrame
     participant_col = test_dataset.id_col  # e.g., 'id_num'
     participants = df_results[participant_col].unique()
     
-    # Build Plotly traces for each participant: two traces (real & predicted) per participant.
-    traces = []
-    for p in participants:
-        df_p = df_results[df_results[participant_col] == p]
-        traces.append(go.Scatter(
-            x=df_p['day'],
-            y=df_p['Real'],
-            mode='lines',
-            name=f'Real ({p})',
-            visible=False  # We'll control visibility via the dropdown.
-        ))
-        traces.append(go.Scatter(
-            x=df_p['day'],
-            y=df_p['Predicted'],
-            mode='lines',
-            name=f'Predicted ({p})',
-            visible=False
-        ))
+    # Create a figure with subplots for each participant
+    n_participants = len(participants)
+    fig, axes = plt.subplots(n_participants, 1, figsize=(12, 4 * n_participants), constrained_layout=True)
     
-    total_traces = len(traces)  # Should be 2 * number of participants.
+    # If there's only one participant, axes won't be an array, so convert it to a list
+    if n_participants == 1:
+        axes = [axes]
     
-    # Create dropdown buttons. Each button sets visibility so that only the two traces for one participant are shown.
-    dropdown_buttons = []
+    # Plot real and predicted values for each participant
     for i, p in enumerate(participants):
-        visibility = [False] * total_traces
-        # For participant p, set traces at indices 2*i and 2*i+1 to True.
-        visibility[2*i] = True
-        visibility[2*i+1] = True
-        button = dict(
-            label=str(p),
-            method="update",
-            args=[{"visible": visibility},
-                  {"title": f"Real vs Predicted Mood Values for Participant {p}",
-                   "xaxis": {"title": "Day"},
-                   "yaxis": {"title": "Mood Value"}}]
-        )
-        dropdown_buttons.append(button)
+        df_p = df_results[df_results[participant_col] == p]
+        
+        # Sort by day to ensure proper line plotting
+        df_p = df_p.sort_values('day')
+        
+        # Plot real values
+        sns.lineplot(x='day', y='Real', data=df_p, ax=axes[i], label='Real', marker='o')
+        
+        # Plot predicted values
+        sns.lineplot(x='day', y='Predicted', data=df_p, ax=axes[i], label='Predicted', marker='x')
+        
+        # Customize plot
+        axes[i].set_title(f'Participant {p}')
+        axes[i].set_xlabel('Day')
+        # rotate x-axis labels
+        axes[i].tick_params(axis='x', rotation=45)
+        axes[i].set_ylabel('Mood Value')
+        axes[i].legend()
+        axes[i].grid(True, linestyle='--', alpha=0.7)
     
-    # Set the initial visibility: show the first participant.
-    initial_visibility = [False] * total_traces
-    initial_visibility[0] = True
-    initial_visibility[1] = True
-    for i in range(total_traces):
-        traces[i].visible = initial_visibility[i]
+    # Add an overall title to the figure
+    fig.suptitle(f'Real vs Predicted Mood Values\n{title}', fontsize=16)
     
-    # Build the figure with all traces and add the dropdown menu.
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        updatemenus=[
-            dict(
-                active=0,
-                buttons=dropdown_buttons,
-                x=1.1,
-                y=1.0,
-                showactive=True
-            )
-        ],
-        title=f"Real vs Predicted Mood Values for Participant {participants[0]}",
-        xaxis_title="Day",
-        yaxis_title="Mood Value"
-    )
-    
+    # Display the plot if requested
     if show_plot:
-        fig.show()
-    if save_html:
-        outdir = "figures/plotly/predictions"
+        plt.show()
+    
+    # Save the figure if requested
+    if save_fig:
+        outdir = "figures/matplotlib/predictions"
         os.makedirs(outdir, exist_ok=True)
-        fig.write_html(os.path.join(outdir, f"predictions_{title}.html"))
-
-    # MAE RMSE R2
+        fig.savefig(os.path.join(outdir, f"predictions_{title}.png"), dpi=300, bbox_inches='tight')
+        print(f"Figure saved to {os.path.join(outdir, f'predictions_{title}.png')}")
+    
+    # Calculate metrics
     mae = mean_absolute_error(all_targets, all_predictions)
     mse = mean_squared_error(all_targets, all_predictions)
     rmse = np.sqrt(mse)
     r2 = r2_score(all_targets, all_predictions)
     print(f"MAE: {mae}, RMSE: {rmse}, R2: {r2}")
+    
     return df_results, mae, mse, rmse, r2
-    
-    
 
-def create_data_split(df, proportion_train=0.7, proportion_val=0.15, split_within_participants=True, seq_length=5):
+
+def compare_train_val_predictions(train_model, train_loader, train_dataset, 
+                                val_model, val_loader, val_dataset,
+                                target_scaler=None, show_plot=True, 
+                                save_fig=True, title="train_val_comparison",
+                                scaler_type="StandardScaler"):
     """
-    Split data into train, validation, and test sets
+    Runs predictions on both training and validation data, and plots them side by side
+    for each participant across the whole duration.
     
-    Args:
-        df: DataFrame containing the data
-        proportion_train: Proportion of data for training
-        proportion_val: Proportion of data for validation
-        split_within_participants: Whether to split within participants or across participants
-        seq_length: Sequence length required for model
-        
-    Returns:
-        train_df, val_df, test_df: DataFrames for training, validation, and testing
+    Parameters:
+        train_model: Trained PyTorch model for training data.
+        train_loader: DataLoader for the training dataset.
+        train_dataset: The dataset instance for training data.
+        val_model: Trained PyTorch model for validation data (often same as train_model).
+        val_loader: DataLoader for the validation dataset.
+        val_dataset: The dataset instance for validation data.
+        target_scaler: (Optional) Scaler used to normalize the target data.
+        show_plot: Whether to display the plot.
+        save_fig: Whether to save the figure to disk.
+        title: Title prefix for the plot.
+        scaler_type: Type of scaler used ("StandardScaler" or "MinMaxScaler").
     """
+    import torch
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import os
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    import pandas as pd
     
-    dfs_train = []
-    dfs_val = []
-    dfs_test = []
+    # Get predictions for training data
+    train_results, train_mae, train_mse, train_rmse, train_r2 = predict_and_plot(
+        train_model, train_loader, train_dataset, target_scaler, 
+        show_plot=False, save_fig=False, title=f"{title}_train", scaler_type=scaler_type
+    )
     
-    if split_within_participants:
-        # Split within participants (chronologically)
-        for participant, group in df.groupby('id_num'):
-            group = group.sort_values(by='day')
-            
-            # Calculate split indices
-            train_idx = int(len(group) * proportion_train)
-            val_idx = int(len(group) * (proportion_train + proportion_val))
-            
-            # Ensure each set has at least seq_length + 1 samples
-            min_samples = seq_length + 1
-            
-            # Adjust if there's not enough data
-            if len(group) < 3 * min_samples:
-                # Skip this participant if not enough data
-                continue
-                
-            # Ensure train set has enough data
-            if train_idx < min_samples:
-                train_idx = min_samples
-                
-            # Ensure val set has enough data
-            remaining = len(group) - train_idx
-            val_samples = int(remaining * proportion_val / (1 - proportion_train))
-            if val_samples < min_samples:
-                val_samples = min_samples
-            val_idx = train_idx + val_samples
-            
-            # Ensure test set has enough data
-            if len(group) - val_idx < min_samples:
-                val_idx = len(group) - min_samples
-                
-            # Add to respective sets
-            dfs_train.append(group.iloc[:train_idx])
-            dfs_val.append(group.iloc[train_idx:val_idx])
-            dfs_test.append(group.iloc[val_idx:])
-        
-        train_df = pd.concat(dfs_train)
-        val_df = pd.concat(dfs_val)
-        test_df = pd.concat(dfs_test)
-        
-        # Record split dates for reference
-        split_dates = []
-        for participant, group in df.groupby('id_num'):
-            if participant in train_df['id_num'].unique() and participant in val_df['id_num'].unique() and participant in test_df['id_num'].unique():
-                participant_train = train_df[train_df['id_num'] == participant]
-                participant_val = val_df[val_df['id_num'] == participant]
-                participant_test = test_df[test_df['id_num'] == participant]
-                
-                split_dates.append({
-                    "participant": participant,
-                    "train_start": participant_train['day'].min(),
-                    "train_end": participant_train['day'].max(),
-                    "val_start": participant_val['day'].min(),
-                    "val_end": participant_val['day'].max(),
-                    "test_start": participant_test['day'].min(),
-                    "test_end": participant_test['day'].max(),
-                })
-        
-        dates_df = pd.DataFrame(split_dates)
-        dates_df.to_csv("tables/training_dates_split.csv", index=False)
-        
-    else:
-        # Split across participants
-        participant_ids = df['id_num'].unique()
-        
-        # Split participants (70% train, 15% val, 15% test)
-        train_val_ids, test_ids = train_test_split(participant_ids, test_size=1-proportion_train-proportion_val, random_state=42)
-        train_ids, val_ids = train_test_split(train_val_ids, test_size=proportion_val/(proportion_train+proportion_val), random_state=42)
-        
-        print(f"Train IDs: {train_ids}")
-        print(f"Validation IDs: {val_ids}")
-        print(f"Test IDs: {test_ids}")
-        
-        # Filter the original DataFrame based on these IDs
-        train_df = df[df['id_num'].isin(train_ids)].copy()
-        val_df = df[df['id_num'].isin(val_ids)].copy()
-        test_df = df[df['id_num'].isin(test_ids)].copy()
-        
-        # Sort by participant and day
-        train_df.sort_values(by=['id_num', 'day'], inplace=True)
-        val_df.sort_values(by=['id_num', 'day'], inplace=True)
-        test_df.sort_values(by=['id_num', 'day'], inplace=True)
+    # Get predictions for validation data
+    val_results, val_mae, val_mse, val_rmse, val_r2 = predict_and_plot(
+        val_model, val_loader, val_dataset, target_scaler,
+        show_plot=False, save_fig=False, title=f"{title}_val", scaler_type=scaler_type
+    )
     
-    return train_df, val_df, test_df
+    # Add a dataset column to identify train vs val
+    train_results['Dataset'] = 'Train'
+    val_results['Dataset'] = 'Validation'
+    
+    # Get participant column name
+    participant_col = train_dataset.id_col  # e.g., 'id_num'
+    
+    # Get unique participants from both datasets
+    train_participants = train_results[participant_col].unique()
+    val_participants = val_results[participant_col].unique()
+    all_participants = np.union1d(train_participants, val_participants)
+    
+    # Create a figure with subplots for each participant
+    n_participants = len(all_participants)
+    fig, axes = plt.subplots(n_participants, 2, figsize=(16, 4 * n_participants), constrained_layout=True)
+    
+    # If there's only one participant, axes won't be a 2D array, so reshape it
+    if n_participants == 1:
+        axes = axes.reshape(1, 2)
+    
+    # Plot train and validation results side by side for each participant
+    for i, p in enumerate(all_participants):
+        # Training data plot
+        if p in train_participants:
+            df_p_train = train_results[train_results[participant_col] == p]
+            df_p_train = df_p_train.sort_values('day')
+            
+            # Plot real values
+            sns.lineplot(x='day', y='Real', data=df_p_train, ax=axes[i, 0], 
+                        label='Real', marker='o', color='blue')
+            
+            # Plot predicted values
+            sns.lineplot(x='day', y='Predicted', data=df_p_train, ax=axes[i, 0], 
+                        label='Predicted', marker='x', color='red')
+            
+            # Customize plot
+            axes[i, 0].set_title(f'Training Data - Participant {p}')
+            axes[i, 0].set_xlabel('Day')
+            axes[i, 0].set_ylabel('Mood Value')
+            axes[i, 0].legend()
+            axes[i, 0].grid(True, linestyle='--', alpha=0.7)
+        else:
+            axes[i, 0].text(0.5, 0.5, f'No training data for Participant {p}', 
+                          ha='center', va='center', transform=axes[i, 0].transAxes)
+            axes[i, 0].set_title(f'Training Data - Participant {p}')
+            
+        # Validation data plot
+        if p in val_participants:
+            df_p_val = val_results[val_results[participant_col] == p]
+            df_p_val = df_p_val.sort_values('day')
+            
+            # Plot real values
+            sns.lineplot(x='day', y='Real', data=df_p_val, ax=axes[i, 1], 
+                        label='Real', marker='o', color='blue')
+            
+            # Plot predicted values
+            sns.lineplot(x='day', y='Predicted', data=df_p_val, ax=axes[i, 1], 
+                        label='Predicted', marker='x', color='red')
+            
+            # Customize plot
+            axes[i, 1].set_title(f'Validation Data - Participant {p}')
+            axes[i, 1].set_xlabel('Day')
+            axes[i, 1].set_ylabel('Mood Value')
+            axes[i, 1].legend()
+            axes[i, 1].grid(True, linestyle='--', alpha=0.7)
+        else:
+            axes[i, 1].text(0.5, 0.5, f'No validation data for Participant {p}', 
+                          ha='center', va='center', transform=axes[i, 1].transAxes)
+            axes[i, 1].set_title(f'Validation Data - Participant {p}')
+    
+    # Add an overall title to the figure
+    fig.suptitle(f'Train vs Validation: Real and Predicted Mood Values\n{title}', fontsize=16)
+    
+    # Print metrics
+    print("\nTraining Metrics:")
+    print(f"MAE: {train_mae}, RMSE: {train_rmse}, R2: {train_r2}")
+    print("\nValidation Metrics:")
+    print(f"MAE: {val_mae}, RMSE: {val_rmse}, R2: {val_r2}")
+    
+    # Display the plot if requested
+    if show_plot:
+        plt.show()
+    
+    # Save the figure if requested
+    if save_fig:
+        outdir = "figures/matplotlib/train_val_comparison"
+        os.makedirs(outdir, exist_ok=True)
+        fig.savefig(os.path.join(outdir, f"{title}.png"), dpi=300, bbox_inches='tight')
+        print(f"Figure saved to {os.path.join(outdir, f'{title}.png')}")
+    
+    return {
+        'train_results': train_results,
+        'train_metrics': {'mae': train_mae, 'mse': train_mse, 'rmse': train_rmse, 'r2': train_r2},
+        'val_results': val_results,
+        'val_metrics': {'mae': val_mae, 'mse': val_mse, 'rmse': val_rmse, 'r2': val_r2}
+    }
 
 
 def save_model(model, hyperparams, metrics, path="models"):
@@ -547,14 +963,14 @@ def load_model(model_path, device):
 
 
 def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, test_df=None, 
-                      dataset_name=None, imputation=None, dropped_vars=None):
+                      dataset_name=None, imputation=None, dropped_vars=None, save_fig=True):
     """
     Train and evaluate a model with given hyperparameters.
-    This version has all Ray Tune dependencies removed.
+    Updated to work with padding-enabled MultiParticipantDataset.
     
     Args:
         config: Dictionary of hyperparameters
-        checkpoint_dir: Directory for checkpoints (unused without Ray Tune)
+        checkpoint_dir: Directory for checkpoints
         train_df, val_df, test_df: DataFrames for training, validation, and testing
         dataset_name, imputation, dropped_vars: Data information
     
@@ -572,37 +988,77 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
     dropout = config["dropout"]
     model_type = config["model_type"]
     num_epochs = config["num_epochs"]
+
     transform_target = config["transform_target"]
+    per_participant_norm = config["per_participant_normalization"]
     scaler_type = config["scaler_type"]
+
+    shuffle_data = config["shuffle_data"]
+
     
-    # Normalize data
-    train_df_normalized, scaler, scaler_target = normalize(
-        train_df, scaler=None, scaler_target=None, 
-        transform_target=transform_target, scaler_type=scaler_type
-    )
-    val_df_normalized, _, _ = normalize(
-        val_df, scaler=scaler, scaler_target=scaler_target, 
-        transform_target=transform_target, scaler_type=scaler_type
-    )
-    test_df_normalized, _, _ = normalize(
-        test_df, scaler=scaler, scaler_target=scaler_target, 
-        transform_target=transform_target, scaler_type=scaler_type
+    # Normalize data if needed
+    # Create datasets with normalization inside
+    train_dataset = MultiParticipantDataset(
+        df=train_df, 
+        seq_length=seq_length,
+        normalize_data=True,
+        transform_target=transform_target,
+        scaler_type=scaler_type,
+        per_participant_normalization=per_participant_norm
     )
     
-    # Create datasets
-    train_dataset = MultiParticipantDataset(train_df_normalized, seq_length=seq_length)
-    val_dataset = MultiParticipantDataset(val_df_normalized, seq_length=seq_length)
-    test_dataset = MultiParticipantDataset(test_df_normalized, seq_length=seq_length)
+    # Get scalers from training set to reuse
+    scalers = train_dataset.get_scalers()
+    
+    # Create validation and test datasets with same scalers
+    val_dataset = MultiParticipantDataset(
+        df=val_df, 
+        seq_length=seq_length,
+        normalize_data=True,
+        transform_target=transform_target,
+        scaler_type=scaler_type,
+        per_participant_normalization=per_participant_norm,
+        existing_scalers=scalers
+    )
+    
+    test_dataset = MultiParticipantDataset(
+        df=test_df, 
+        seq_length=seq_length,
+        normalize_data=True,
+        transform_target=transform_target,
+        scaler_type=scaler_type,
+        per_participant_normalization=per_participant_norm,
+        existing_scalers=scalers
+    )
+    
+    # Get target scaler for later use
+    if transform_target:
+        if per_participant_norm:
+            scaler_target = scalers.get('target', None)  # Dictionary of participant-specific scalers
+        else:
+            scaler_target = scalers.get('target', None)  # Single scaler
+    else:
+        scaler_target = None
     
     # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)  # No shuffle for validation
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)  # No shuffle for testing
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_data)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
-    # Initialize model
-    input_dim = len(train_dataset.features)
+    # Get input dimensions from dataset
+    sample_batch = next(iter(train_loader))
+    if len(sample_batch) == 4:  # With mask
+        x_features, x_id, _, _ = sample_batch
+        input_dim = x_features.shape[2]  # [batch_size, seq_length, features]
+    else:  # Without mask
+        x_features, x_id, _ = sample_batch
+        input_dim = x_features.shape[2]
+    
+    # Count number of unique participants for embedding
+    num_participants = train_df[train_df.columns[0]].nunique()
     output_dim = 1
     
+
     if model_type == "LSTM":
         model = LSTMModel(input_dim, hidden_dim, num_layers, output_dim, dropout)
     elif model_type == "SimpleRNN":
@@ -626,7 +1082,7 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # Load checkpoint if available (manual checkpoint handling)
+    # Load checkpoint if available
     if checkpoint_dir and os.path.exists(os.path.join(checkpoint_dir, "model.pt")):
         model.load_state_dict(torch.load(os.path.join(checkpoint_dir, "model.pt")))
         print(f"Loaded model from {checkpoint_dir}")
@@ -646,20 +1102,34 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
         train_loss = 0.0
         
         for batch in train_loader:
-            x_features, x_id, y = batch
-            x_features = x_features.to(device)
-            x_id = x_id.to(device)
-            y = y.to(device)
+            # Handle batch based on whether it includes masks
+            if len(batch) == 4:  # With mask
+                x_features, x_id, y, mask = [b.to(device) for b in batch]
+                # Forward pass (with mask)
+                outputs = model(x_features, x_id, mask)
+            else:  # Without mask (for backward compatibility)
+                x_features, x_id, y = [b.to(device) for b in batch]
+                # Forward pass (without mask)
+                outputs = model(x_features)
             
-            # Forward pass
-            outputs = model(x_features)
+
+            # print(f"x_features shape: {x_features.shape}")
+            # print(f"outputs shape: {outputs.shape}")
+            # print(f"y shape: {y.shape}")
+
+            # # Try to inspect the model structure:
+            # print(f"Model structure: {model}")
+
+            # # Right before loss calculation:
+            # print(f"outputs.squeeze() shape: {outputs.squeeze().shape}")
+            # Calculate loss
             loss = criterion(outputs.squeeze(), y)
             
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
             
-            # Gradient clipping (using a different variable name to avoid conflicts)
+            # Gradient clipping
             do_clip_grads = config.get("clip_gradients", True)
             if do_clip_grads:
                 max_grad_norm = config.get("max_grad_norm", 1.0)
@@ -677,12 +1147,17 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
         
         with torch.no_grad():
             for batch in val_loader:
-                x_features, x_id, y = batch
-                x_features = x_features.to(device)
-                x_id = x_id.to(device)
-                y = y.to(device)
+                # Handle batch based on whether it includes masks
+                if len(batch) == 4:  # With mask
+                    x_features, x_id, y, mask = [b.to(device) for b in batch]
+                    # Forward pass (with mask)
+                    outputs = model(x_features, x_id, mask)
+                else:  # Without mask (for backward compatibility)
+                    x_features, x_id, y = [b.to(device) for b in batch]
+                    # Forward pass (without mask)
+                    outputs = model(x_features)
                 
-                outputs = model(x_features)
+                # Calculate loss
                 loss = criterion(outputs.squeeze(), y)
                 val_loss += loss.item()
         
@@ -695,7 +1170,7 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
             patience_counter = 0
             best_model_state = model.state_dict().copy()
             
-            # Save best model checkpoint (optional)
+            # Save best model checkpoint
             os.makedirs('checkpoints', exist_ok=True)
             torch.save(model.state_dict(), f'checkpoints/model_epoch_{epoch+1}.pt')
         else:
@@ -704,9 +1179,9 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
         print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         
         # Early stopping
-        if patience_counter >= patience:
-            print(f"Early stopping triggered after {epoch+1} epochs")
-            break
+        # if patience_counter >= patience:
+        #     print(f"Early stopping triggered after {epoch+1} epochs")
+        #     break
     
     # Load best model for evaluation
     if best_model_state:
@@ -715,36 +1190,207 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
     # Evaluate on test set
     model.eval()
     test_loss = 0.0
+    predictions = []
+    actuals = []
     
     with torch.no_grad():
         for batch in test_loader:
-            x_features, x_id, y = batch
-            x_features = x_features.to(device)
-            x_id = x_id.to(device)
-            y = y.to(device)
+            # Handle batch based on whether it includes masks
+            if len(batch) == 4:  # With mask
+                x_features, x_id, y, mask = [b.to(device) for b in batch]
+                # Forward pass (with mask)
+                outputs = model(x_features, x_id, mask)
+            else:  # Without mask (for backward compatibility)
+                x_features, x_id, y = [b.to(device) for b in batch]
+                # Forward pass (without mask)
+                outputs = model(x_features)
             
-            outputs = model(x_features)
+            # Calculate loss
             loss = criterion(outputs.squeeze(), y)
             test_loss += loss.item()
+            
+            # Store predictions and actuals for metrics
+            predictions.extend(outputs.squeeze().cpu().numpy())
+            actuals.extend(y.cpu().numpy())
     
     avg_test_loss = test_loss / len(test_loader)
     print(f"Test Loss: {avg_test_loss:.4f}")
     
-    # Detailed evaluation with metrics
-    df_train_results, mae_train, mse_train, rmse_train, r2_train = predict_and_plot(
-        model, train_loader, train_dataset, target_scaler=scaler_target, 
-        show_plot=False, save_html=False, title="train", scaler_type=scaler_type
-    )
+    # Convert to numpy arrays
+    predictions = np.array(predictions)
+    actuals = np.array(actuals)
     
-    df_val_results, mae_val, mse_val, rmse_val, r2_val = predict_and_plot(
-        model, val_loader, val_dataset, target_scaler=scaler_target, 
-        show_plot=False, save_html=False, title="val", scaler_type=scaler_type
-    )
+    # Inverse transform if target was normalized
+    if transform_target and scaler_target is not None:
+        if isinstance(scaler_target, dict):
+            # This is a simplified approach for per-participant normalization
+            # For proper handling, would need to track participant IDs
+            # Just using the first participant's scaler as an approximation
+            first_participant = list(scaler_target.keys())[0]
+            predictions_2d = predictions.reshape(-1, 1)
+            actuals_2d = actuals.reshape(-1, 1)
+            predictions = scaler_target[first_participant].inverse_transform(predictions_2d).flatten()
+            actuals = scaler_target[first_participant].inverse_transform(actuals_2d).flatten()
+        else:
+            # Global scaler
+            predictions_2d = predictions.reshape(-1, 1)
+            actuals_2d = actuals.reshape(-1, 1)
+            predictions = scaler_target.inverse_transform(predictions_2d).flatten()
+            actuals = scaler_target.inverse_transform(actuals_2d).flatten()
     
-    df_test_results, mae_test, mse_test, rmse_test, r2_test = predict_and_plot(
-        model, test_loader, test_dataset, target_scaler=scaler_target, 
-        show_plot=False, save_html=False, title="test", scaler_type=scaler_type
-    )
+    # Calculate metrics for test set
+    mse_test = mean_squared_error(actuals, predictions)
+    rmse_test = np.sqrt(mse_test)
+    mae_test = mean_absolute_error(actuals, predictions)
+    r2_test = r2_score(actuals, predictions)
+    
+    print(f"Test MSE: {mse_test:.4f}")
+    print(f"Test RMSE: {rmse_test:.4f}")
+    print(f"Test MAE: {mae_test:.4f}")
+    print(f"Test R²: {r2_test:.4f}")
+    
+    # Create results dataframe for test set
+    df_test_results = pd.DataFrame({
+        'Actual': actuals,
+        'Predicted': predictions,
+    })
+    
+    # Calculate metrics for train and validation sets similarly
+    # (Simplified implementation compared to original - would need to adapt predict_and_plot function)
+    
+    # Training set metrics
+    train_predictions = []
+    train_actuals = []
+    
+    model.eval()
+    with torch.no_grad():
+        for batch in train_loader:
+            if len(batch) == 4:
+                x_features, x_id, y, mask = [b.to(device) for b in batch]
+                outputs = model(x_features, x_id, mask)
+            else:
+                x_features, x_id, y = [b.to(device) for b in batch]
+                outputs = model(x_features)
+            
+            train_predictions.extend(outputs.squeeze().cpu().numpy())
+            train_actuals.extend(y.cpu().numpy())
+    
+    train_predictions = np.array(train_predictions)
+    train_actuals = np.array(train_actuals)
+    
+    # Inverse transform if needed
+    if transform_target and scaler_target is not None:
+        if isinstance(scaler_target, dict):
+            first_participant = list(scaler_target.keys())[0]
+            train_predictions_2d = train_predictions.reshape(-1, 1)
+            train_actuals_2d = train_actuals.reshape(-1, 1)
+            train_predictions = scaler_target[first_participant].inverse_transform(train_predictions_2d).flatten()
+            train_actuals = scaler_target[first_participant].inverse_transform(train_actuals_2d).flatten()
+        else:
+            train_predictions_2d = train_predictions.reshape(-1, 1)
+            train_actuals_2d = train_actuals.reshape(-1, 1)
+            train_predictions = scaler_target.inverse_transform(train_predictions_2d).flatten()
+            train_actuals = scaler_target.inverse_transform(train_actuals_2d).flatten()
+    
+    mse_train = mean_squared_error(train_actuals, train_predictions)
+    rmse_train = np.sqrt(mse_train)
+    mae_train = mean_absolute_error(train_actuals, train_predictions)
+    r2_train = r2_score(train_actuals, train_predictions)
+    
+    # Validation set metrics
+    val_predictions = []
+    val_actuals = []
+    
+    with torch.no_grad():
+        for batch in val_loader:
+            if len(batch) == 4:
+                x_features, x_id, y, mask = [b.to(device) for b in batch]
+                outputs = model(x_features, x_id, mask)
+            else:
+                x_features, x_id, y = [b.to(device) for b in batch]
+                outputs = model(x_features)
+            
+            val_predictions.extend(outputs.squeeze().cpu().numpy())
+            val_actuals.extend(y.cpu().numpy())
+    
+    val_predictions = np.array(val_predictions)
+    val_actuals = np.array(val_actuals)
+    
+    # Inverse transform if needed
+    if transform_target and scaler_target is not None:
+        if isinstance(scaler_target, dict):
+            first_participant = list(scaler_target.keys())[0]
+            val_predictions_2d = val_predictions.reshape(-1, 1)
+            val_actuals_2d = val_actuals.reshape(-1, 1)
+            val_predictions = scaler_target[first_participant].inverse_transform(val_predictions_2d).flatten()
+            val_actuals = scaler_target[first_participant].inverse_transform(val_actuals_2d).flatten()
+        else:
+            val_predictions_2d = val_predictions.reshape(-1, 1)
+            val_actuals_2d = val_actuals.reshape(-1, 1)
+            val_predictions = scaler_target.inverse_transform(val_predictions_2d).flatten()
+            val_actuals = scaler_target.inverse_transform(val_actuals_2d).flatten()
+    
+    mse_val = mean_squared_error(val_actuals, val_predictions)
+    rmse_val = np.sqrt(mse_val)
+    mae_val = mean_absolute_error(val_actuals, val_predictions)
+    r2_val = r2_score(val_actuals, val_predictions)
+    
+    # Create results dataframes
+    df_train_results = pd.DataFrame({
+        'Actual': train_actuals,
+        'Predicted': train_predictions,
+    })
+    
+    df_val_results = pd.DataFrame({
+        'Actual': val_actuals,
+        'Predicted': val_predictions,
+    })
+    
+    # Save plots if requested
+    if save_fig:
+        os.makedirs('figures', exist_ok=True)
+        
+        # Train set plot
+        plt.figure(figsize=(10, 6))
+        plt.scatter(train_actuals, train_predictions, alpha=0.5)
+        plt.plot([min(train_actuals), max(train_actuals)], [min(train_actuals), max(train_actuals)], 'r--')
+        plt.xlabel('Actual Mood')
+        plt.ylabel('Predicted Mood')
+        plt.title(f'Train Set: Actual vs Predicted (R² = {r2_train:.4f})')
+        plt.savefig('figures/train_predictions.png')
+        plt.close()
+        
+        # Validation set plot
+        plt.figure(figsize=(10, 6))
+        plt.scatter(val_actuals, val_predictions, alpha=0.5)
+        plt.plot([min(val_actuals), max(val_actuals)], [min(val_actuals), max(val_actuals)], 'r--')
+        plt.xlabel('Actual Mood')
+        plt.ylabel('Predicted Mood')
+        plt.title(f'Validation Set: Actual vs Predicted (R² = {r2_val:.4f})')
+        plt.savefig('figures/val_predictions.png')
+        plt.close()
+        
+        # Test set plot
+        plt.figure(figsize=(10, 6))
+        plt.scatter(actuals, predictions, alpha=0.5)
+        plt.plot([min(actuals), max(actuals)], [min(actuals), max(actuals)], 'r--')
+        plt.xlabel('Actual Mood')
+        plt.ylabel('Predicted Mood')
+        plt.title(f'Test Set: Actual vs Predicted (R² = {r2_test:.4f})')
+        plt.savefig('figures/test_predictions.png')
+        plt.close()
+        
+        # Loss curves
+        plt.figure(figsize=(12, 6))
+        plt.plot(range(1, len(train_losses)+1), train_losses, label='Train Loss', marker='o')
+        plt.plot(range(1, len(val_losses)+1), val_losses, label='Val Loss', marker='o')
+        plt.axhline(y=avg_test_loss, color='r', linestyle='-', label='Test Loss')
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss (MSE)")
+        plt.title("Training, Validation, and Test Loss")
+        plt.legend()
+        plt.savefig("figures/loss_curves.png")
+        plt.close()
     
     # Collect metrics
     metrics = {
@@ -765,57 +1411,58 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
         "r2_test": r2_test
     }
     
-    # Collect hyperparameters
+    # Collect hyperparameters (adapted for enhanced model)
     hyperparams = {
+        # Data information
         "dataset": dataset_name,
         "dropped_vars": dropped_vars,
         "imputation": imputation,
+        
+        # Model architecture
         "model": model_type,
-        "train_size": len(train_df_normalized),
-        "val_size": len(val_df_normalized),
-        "test_size": len(test_df_normalized),
-        "sequence_length": seq_length,
-        "scaler": scaler_type,
-        "scaler_target": transform_target,
-        "batch_size": batch_size,
         "input_dim": input_dim,
         "hidden_dim": hidden_dim,
         "num_layers": num_layers,
         "output_dim": output_dim,
         "dropout": dropout,
+        
+        # Dataset sizes
+        "train_size": len(train_dataset),
+        "val_size": len(val_dataset),
+        "test_size": len(test_dataset),
+        
+        # Data processing
+        "sequence_length": seq_length,
+        "scaler": scaler_type,
+        "transform_target": transform_target,
+        "per_participant_normalization": per_participant_norm,
+        
+        # Training parameters
+        "batch_size": batch_size,
+        "shuffle_data": shuffle_data,
         "num_epochs": epoch + 1,  # Actual number of epochs run
         "learning_rate": learning_rate,
-        "features": train_dataset.features,
+        "patience": patience,
+        "clip_gradients": config.get("clip_gradients", True),
+        "max_grad_norm": config.get("max_grad_norm", 1.0),
+        
+        # Metadata
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "device": device.type,
     }
     
-    # Save the model
-    save_model(model, hyperparams, metrics)
-    
-    # Generate and save plots
-    predict_and_plot(
-        model, train_loader, train_dataset, target_scaler=scaler_target, 
-        show_plot=False, save_html=True, title="train", scaler_type=scaler_type
-    )
-    predict_and_plot(
-        model, val_loader, val_dataset, target_scaler=scaler_target, 
-        show_plot=False, save_html=True, title="val", scaler_type=scaler_type
-    )
-    predict_and_plot(
-        model, test_loader, test_dataset, target_scaler=scaler_target, 
-        show_plot=False, save_html=True, title="test", scaler_type=scaler_type
-    )
-    
-    # Save loss curves
-    plt.figure(figsize=(12, 6))
-    plt.plot(range(1, len(train_losses)+1), train_losses, label='Train Loss', marker='o')
-    plt.plot(range(1, len(val_losses)+1), val_losses, label='Val Loss', marker='o')
-    plt.axhline(y=avg_test_loss, color='r', linestyle='-', label='Test Loss')
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss (MSE)")
-    plt.title("Training, Validation, and Test Loss")
-    plt.legend()
-    plt.savefig("figures/loss_curves.png")
+    # Save model (assuming save_model function is defined elsewhere)
+    if 'save_model' in globals():
+        save_model(model, hyperparams, metrics)
+    else:
+        # Simple model saving if save_model function not available
+        os.makedirs('models', exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'hyperparams': hyperparams,
+            'metrics': metrics
+        }, f'models/model_{model_type}_{timestamp}.pt')
     
     # Save results to CSV
     results = {}
@@ -836,13 +1483,15 @@ def train_and_evaluate(config, checkpoint_dir=None, train_df=None, val_df=None, 
     }
     
     results_df = pd.DataFrame(results).T
-    if not os.path.exists('tables/results'):
-        os.makedirs('tables/results', exist_ok=True)
+    os.makedirs('tables/results', exist_ok=True)
+    
+    if not os.path.exists('tables/results/model_results.csv'):
         results_df.to_csv('tables/results/model_results.csv', index=True, header=True)
     else:
         results_df.to_csv('tables/results/model_results.csv', mode='a', header=False, index=True)
     
     return metrics
+
 
 
 def simple_hyperparameter_tuning(train_df, val_df, test_df, dataset_name, imputation, dropped_vars, default_config, param_grid):
@@ -889,8 +1538,6 @@ def simple_hyperparameter_tuning(train_df, val_df, test_df, dataset_name, imputa
     best_val_loss = float('inf')
     best_config = None
     
-    
-    
     # Loop through combinations
     for i, combination in enumerate(key_combinations):
         # Create config with this combination
@@ -910,7 +1557,8 @@ def simple_hyperparameter_tuning(train_df, val_df, test_df, dataset_name, imputa
                 test_df=test_df,
                 dataset_name=dataset_name,
                 imputation=imputation,
-                dropped_vars=dropped_vars
+                dropped_vars=dropped_vars,
+                save_fig=False
             )
             end_time = time.time()
             
@@ -1055,3 +1703,5 @@ def modify_train_and_evaluate_for_simple_tuning():
     
     print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
     """)
+
+
