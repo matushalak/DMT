@@ -38,6 +38,9 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     ### 3) FEATURE ENGINEERING
     data = engineer_features(data, method=method)
 
+    # feature encodings for month, week & rescaling bedtime
+    data = feature_encodings(data)
+
     ### 4) add target and crop last day for each participant without target
     data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
                                name = method) # saves the DF if name provided
@@ -400,6 +403,30 @@ def get_wakeup_time(h):
     return h.min() if not h.empty else np.nan
 
 
+def feature_encodings(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Feature encodings for categorical variables
+    """
+    # one-hot encoding for categorical variables
+    #duplicate column time_of_day
+    if 'time_of_day' in df.columns:
+        df['time_of_day_non_encoded'] = df['time_of_day']
+        one_hot_encoding_cols = ["month", "weekday", "time_of_day"]
+    else:
+        one_hot_encoding_cols = ["month", "weekday"]
+    df = pd.get_dummies(df, columns=one_hot_encoding_cols, drop_first=True)
+    
+    # get the bool columns
+    bool_cols = df.select_dtypes(include=['bool']).columns.tolist()
+    # convert bool columns to int
+    for col in bool_cols:
+        df[col] = df[col].astype(int)
+
+    # TRANSFORM TO INT 
+    # for all values lower than 15 in bed_time, add 24
+    df.loc[df['bed_time_daily'] < 15, 'bed_time_daily'] += 24
+    return df
+
 # ------------ utils ------------
 # NOTE: feel free to change ordering
 def sort_pivot_columns(cols):
@@ -487,4 +514,4 @@ def sort_pivot_columns(cols):
 
 
 if __name__ == '__main__':
-    preprocess_pipeline(method='date')
+    preprocess_pipeline(method='both')
