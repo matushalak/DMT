@@ -11,7 +11,17 @@ from xgboost import XGBRegressor
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import os
-from ML_utils import normalize_data_and_split
+from typing import List, Dict, Tuple, Optional, Union
+from datetime import datetime
+
+# import SVR and gradient boosting
+from sklearn.svm import SVR
+from sklearn.ensemble import GradientBoostingRegressor
+
+
+from ML_utils import normalize_data_and_split, plot_predictions
+# ------------------------------------------------------
+# Define the updated normalize_data_and_split function with metadata for timeseries plotting
 
 # ------------------------------------------------------
 # Flag to control hyperparameter tuning
@@ -19,68 +29,137 @@ tune_hyperparameters = False  # set to False to disable tuning
 
 # dataset and label details
 dataset_name = "df_ready_both"
-label = 'combined_app_cat_mean_impute'
+label = ''
 df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 # print(df.head())
 
+
+
+
+df_numeric = df.select_dtypes(include=[np.number])
+
+# # check correlations between features and target
+correlations = df_numeric.corr()
+correlation_with_target = correlations["target"].sort_values(ascending=False)
+print("Correlation with target:")
+print(correlation_with_target)
+
+# # drop any feature with less than 0.1 correlation with target
+# threshold = 0.0
+# features_to_drop = correlation_with_target[abs(correlation_with_target) < threshold].index.tolist()
+# # features_to_drop.remove("target")  # Remove target from the list
+# print("Features to drop based on correlation with target:")
+# print(features_to_drop)
+# # Drop the features from the dataset
+# df.drop(columns=features_to_drop, inplace=True)
+
+
 # Remove features that should not be used in the model
-features = df.columns.tolist()
-features.remove("date")
+features = df.columns.to_list()
+# features.remove('id_num')
+features.remove('target')  # Make sure this matches your actual target column name
+features.remove('date')  # Remove date if present
 features.remove("next_date")
-features.remove("target")
-# Fixed typo in parameter (Fala -> False)
-X_train, X_val, X_test, y_train, y_val, y_test, scalers = normalize_data_and_split(
+
+if "time_of_day_non_encoded" in features:
+    features.remove("time_of_day_non_encoded")
+
+print("features", features)
+
+
+# Update the function call to include timestamp_col parameter
+X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata = normalize_data_and_split(
     df,
     features=features,
     target_col="target",  # Make sure this matches your actual target column name
     id_col='id_num',
-    per_participant_normalization=False,  # Fixed typo: was "Fala"
+    timestamp_col='date',  # Add this parameter for timeseries plotting,
+    per_participant_normalization=True,
     scaler_type="StandardScaler",
-    test_size=0.1,
+    test_size=0.05,
     val_size=0.1,
     random_state=42
 )
-
 # Store feature names before fitting models
 feature_names = X_train.columns.tolist()  # Use X_train instead of X
 
 # Define base models
 models = {
     'Linear Regression': LinearRegression(), 
-    'Ridge Regression': Ridge(), 
+    'Ridge Regression': Ridge(),
     'Lasso Regression': Lasso(), 
     'Elastic Net': ElasticNet(), 
     'Decision Tree': DecisionTreeRegressor(), 
     'Random Forest': RandomForestRegressor(), 
-    'XGBoost Regressor': XGBRegressor(objective='reg:squarederror', eval_metric='rmse')
+    'XGBoost Regressor': XGBRegressor(objective='reg:squarederror', eval_metric='rmse'),
+    'Gradient Boosting': GradientBoostingRegressor(),
+    'SVR': SVR()
 }
 
-# Define parameter grids for hyperparameter tuning
 param_grids = {
-    'Linear Regression': {},  # No hyperparameters to tune for LinearRegression in most cases
+    'Linear Regression': {},  # No hyperparameters to tune
+    
     'Ridge Regression': {
-        'alpha': [0.1, 1.0, 10.0, 50.0]
+        'alpha': [0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 50.0, 100.0],
+        'solver': ['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg', 'sag', 'saga']
     },
+    
     'Lasso Regression': {
-        'alpha': [0.0001, 0.001, 0.01, 0.1, 1.0]
+        'alpha': [0.00001, 0.0001, 0.001, 0.01, 0.05, 0.1, 0.5, 1.0],
+        'max_iter': [10000],
+        'tol': [1e-4],
+        'selection': ['cyclic', 'random']
     },
+    
     'Elastic Net': {
-        'alpha': [0.0001, 0.001, 0.01, 0.1, 1.0],
-        'l1_ratio': [0.1, 0.5, 0.9]
+        'alpha': [0.00001, 0.0001, 0.001, 0.01, 0.05, 0.1, 0.5],
+        'l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9],
+        'max_iter': [10000],
+        'tol': [1e-4],
+        'selection': ['cyclic', 'random']
     },
+    
+    # Given that linear models are performing better, we can simplify tree-based models
     'Decision Tree': {
-        'max_depth': [None, 3, 5, 10],
-        'min_samples_split': [2, 5, 10]
+        'max_depth': [2, 3, 4, 5],  # Limiting depth to prevent overfitting
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4]
     },
+    
     'Random Forest': {
-        'n_estimators': [50, 100],
-        'max_depth': [None, 5, 10],
-        'min_samples_split': [2, 5]
+        'n_estimators': [50, 100, 200],
+        'max_depth': [3, 4, 5],  # More limited depth to control overfitting
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+        'bootstrap': [True, False]
     },
+    
     'XGBoost Regressor': {
-        'n_estimators': [50, 100],
-        'max_depth': [3, 5, 7],
-        'learning_rate': [0.01, 0.1, 0.2]
+        'n_estimators': [50, 100, 200],
+        'max_depth': [2, 3, 4],  # More restricted depth
+        'learning_rate': [0.01, 0.05, 0.1],
+        'subsample': [0.8, 0.9, 1.0],
+        'colsample_bytree': [0.8, 0.9, 1.0],
+        'gamma': [0, 0.1, 0.2],
+        'reg_alpha': [0, 0.1, 1.0],
+        'reg_lambda': [0.1, 1.0, 10.0]
+    },
+    
+    # Adding Gradient Boosting which can sometimes outperform XGBoost
+    'Gradient Boosting': {
+        'n_estimators': [50, 100, 200],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [2, 3, 4],
+        'min_samples_split': [2, 5],
+        'subsample': [0.8, 0.9, 1.0]
+    },
+    
+    # Adding SVR which might work well with your data structure
+    'SVR': {
+        'C': [0.1, 1.0, 10.0],
+        'kernel': ['linear', 'rbf'],
+        'gamma': ['scale', 'auto', 0.1, 0.01],
+        'epsilon': [0.05, 0.1, 0.2]
     }
 }
 
@@ -146,8 +225,9 @@ feature_importances_path = os.path.join(plots_path, 'feature_importances')
 predictions_path = os.path.join(plots_path, 'predictions')
 metrics_path = os.path.join(plots_path, 'metrics')
 visualizations_path = os.path.join(plots_path, 'visualizations')
+timeseries_path = os.path.join(plots_path, 'timeseries')  # New directory for timeseries plots
 
-for directory in [plots_path, feature_importances_path, predictions_path, metrics_path, visualizations_path]:
+for directory in [plots_path, feature_importances_path, predictions_path, metrics_path, visualizations_path, timeseries_path]:
     if not os.path.exists(directory):
         os.makedirs(directory)
 
@@ -287,6 +367,31 @@ for name, model in models.items():
     plt.savefig(os.path.join(predictions_path, f'{name}_predictions_and_metrics.png'))
     plt.close()
 
+    # NEW: Generate timeseries plots for each model
+    # Plot timeseries predictions
+    save_path = os.path.join(timeseries_path, f'{name}_timeseries')
+
+    plot_predictions(
+        y_train, 
+        y_pred_train, 
+        metadata, 
+        dataset='train', 
+        title=f'{name} Train Predictions (All Participants)',
+        save_path=f"{save_path}_train_combined",
+        show_plot=False
+    )
+    
+    # Plot validation set predictions
+    plot_predictions(
+        y_val, 
+        y_pred_val, 
+        metadata, 
+        dataset='val', 
+        title=f'{name} Validation Predictions (All Participants)',
+        save_path=f"{save_path}_val_combined",
+        show_plot=False
+    )
+
 # ------------------------------------------------------
 # Feature Importance analysis
 importances = {}
@@ -362,58 +467,3 @@ for i, (name, model) in enumerate(models.items()):
             'RMSE': np.sqrt(mean_squared_error(y_test, y_pred_test))
         }
     }
-    
-    # Create a text display of the metrics
-    text = f"{name}\n\n"
-    for dataset, dataset_metrics in metrics.items():
-        text += f"{dataset}:\n"
-        for metric_name, value in dataset_metrics.items():
-            text += f"  {metric_name}: {format_value(value)}\n"
-        text += "\n"
-    
-    # Remove axis ticks and frame
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.axis('off')
-    
-    # Add the text
-    ax.text(0.5, 0.5, text, ha='center', va='center', fontsize=10, 
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-plt.tight_layout()
-plt.savefig(os.path.join(visualizations_path, 'all_models_metrics.png'))
-plt.close()
-
-# Create a combined feature importance plot for all models that support it
-models_with_importance = {name: imp for name, imp in importances.items() if imp is not None}
-if models_with_importance:
-    # Calculate grid dimensions
-    num_models_with_imp = len(models_with_importance)
-    cols = min(2, num_models_with_imp)  # Maximum 2 columns for feature importance
-    rows = (num_models_with_imp + cols - 1) // cols  # Ceiling division
-    
-    plt.figure(figsize=(10*cols, 6*rows))
-    
-    for i, (name, importance) in enumerate(models_with_importance.items()):
-        ax = plt.subplot(rows, cols, i+1)
-        
-        imp = np.array(importance).flatten()
-        # Sort features by importance
-        indices = np.argsort(imp)
-        ax.barh(range(len(indices)), imp[indices])
-        ax.set_yticks(range(len(indices)))
-        ax.set_yticklabels([feature_names[i] for i in indices])
-        ax.set_title(f'{name} Feature Importance')
-        ax.set_xlabel('Importance')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(visualizations_path, 'all_models_feature_importance.png'))
-    plt.close()
-
-# ------------------------------------------------------
-# Save results to CSV
-results_path = 'tables/results'
-if not os.path.exists(results_path):
-    os.makedirs(results_path)
-results_df.to_csv(os.path.join(results_path, 'model_results.csv'), index=True, header=True)
-# %%
