@@ -57,10 +57,10 @@ def explore_hourly_trends():
 def explore_sleep():
     df = preprocess_pipeline(load_from_file=True)
     # only keep ID and participant
-    df = df[['id_num', 'wakeup_time_first_daily', 'bed_time_last_daily']]
+    df = df[['id_num', 'wake_time_daily', 'bed_time_daily']]
     plt.figure()
-    plt.hist(df['wakeup_time_first_daily'], bins = np.arange(0, 24), color = 'gold', label= 'wake time')
-    plt.hist(df['bed_time_last_daily'], bins = np.arange(0, 24), color = 'mediumpurple', label = 'bed time')
+    plt.hist(df['bed_time_daily'], bins = 23, color = 'mediumpurple', label = 'bed time')
+    plt.hist(df['wake_time_daily'], bins = 23, color = 'gold', label= 'wake time')
     
     plt.title('Distribution of wake and bedtimes')
     plt.xlim(0, 23)
