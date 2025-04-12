@@ -28,7 +28,7 @@ from ML_utils import normalize_data_and_split, plot_predictions
 tune_hyperparameters = False  # set to False to disable tuning
 
 # dataset and label details
-dataset_name = "df_ready_both"
+dataset_name = "df_ready_date"
 label = ''
 df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 # print(df.head())
@@ -41,8 +41,11 @@ df_numeric = df.select_dtypes(include=[np.number])
 # # check correlations between features and target
 correlations = df_numeric.corr()
 correlation_with_target = correlations["target"].sort_values(ascending=False)
-print("Correlation with target:")
-print(correlation_with_target)
+correlation_with_CATtarget = correlations["categorical_target"].sort_values(ascending=False)
+# print("Correlation with REGRESSION target:")
+# print(correlation_with_target)
+# print("Correlation with CLASSIFICATION target:")
+# print(correlation_with_CATtarget)
 
 # # drop any feature with less than 0.1 correlation with target
 # threshold = 0.0
@@ -58,6 +61,7 @@ print(correlation_with_target)
 features = df.columns.to_list()
 # features.remove('id_num')
 features.remove('target')  # Make sure this matches your actual target column name
+features.remove('categorical_target')  # Make sure this matches your actual target column name
 features.remove('date')  # Remove date if present
 features.remove("next_date")
 
@@ -72,6 +76,7 @@ X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata = normalize_da
     df,
     features=features,
     target_col="target",  # Make sure this matches your actual target column name
+    # target_col="target",  # Make sure this matches your actual target column name
     id_col='id_num',
     timestamp_col='date',  # Add this parameter for timeseries plotting,
     per_participant_normalization=True,

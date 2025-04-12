@@ -153,16 +153,19 @@ def mva(df:pd.DataFrame, vars: tuple[str], mvaN: int) -> pd.DataFrame:
 
 
 def categorical_target(df:pd.DataFrame, x_daily_SD: float = 0.7) -> pd.DataFrame:
-    same = (df['change_mood_mean_daily'] <= x_daily_SD * df['mva7_mood_std_daily']) & (df['change_mood_mean_daily'] >= -x_daily_SD * df['mva7_mood_std_daily'])
-    higher = (df['change_mood_mean_daily'] > x_daily_SD * df['mva7_mood_std_daily'])
-    lower = (df['change_mood_mean_daily'] < -x_daily_SD * df['mva7_mood_std_daily'])
-
-    cat_target = np.zeros(df.shape[0])
-    cat_target[same] = 0
-    cat_target[higher] = 1
-    cat_target[lower] = -1
-
-    df['categorical_target'] = cat_target 
+    # Fixed to prevent data leakage
+    df['categorical_target'] = df.groupby("id_num")['change_mood_mean_daily'].shift(-1)
+    
+    same = (df['categorical_target'] <= x_daily_SD * df['mva7_mood_std_daily']) & (df['categorical_target'] >= -x_daily_SD * df['mva7_mood_std_daily'])
+    higher = (df['categorical_target'] > x_daily_SD * df['mva7_mood_std_daily'])
+    lower = (df['categorical_target'] < -x_daily_SD * df['mva7_mood_std_daily'])
+    
+    # Now recategorize the shifted target:
+    df['categorical_target'] = np.select(
+        [same,higher,lower],
+        [0, 1, -1],
+        default=np.nan)
+    
     return df
 
 
