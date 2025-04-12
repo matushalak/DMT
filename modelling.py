@@ -1,4 +1,4 @@
- #%%
+#%%
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,37 +9,40 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import os
-
+from ML_utils import normalize_data_and_split
 
 # ------------------------------------------------------
 # Flag to control hyperparameter tuning
-tune_hyperparameters = True  # set to False to disable tuning
+tune_hyperparameters = False  # set to False to disable tuning
 
 # dataset and label details
-dataset_name = "mean_mode_imputation_combinedAppCat"
+dataset_name = "df_ready_both"
 label = 'combined_app_cat_mean_impute'
-df = pd.read_csv(f'tables/preprocessed/{dataset_name}.csv')
-print(df.head())
+df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
+# print(df.head())
 
-# For this example, we are only using the 'mood' as input and 'next_day_mood' as target.
+# Remove features that should not be used in the model
+features = df.columns.tolist()
+features.remove("date")
+features.remove("next_date")
+features.remove("target")
+# Fixed typo in parameter (Fala -> False)
+X_train, X_val, X_test, y_train, y_val, y_test, scalers = normalize_data_and_split(
+    df,
+    features=features,
+    target_col="target",  # Make sure this matches your actual target column name
+    id_col='id_num',
+    per_participant_normalization=False,  # Fixed typo: was "Fala"
+    scaler_type="StandardScaler",
+    test_size=0.1,
+    val_size=0.1,
+    random_state=42
+)
 
-
-# X = df["mood"].values.reshape(-1, 1) # if you want to use mood as a single feature
-X = df.drop(columns=['next_day_mood', 'id_num', 'next_day', "day"])  # drop non-feature columns
-y = df['next_day_mood']
-
-print("X features:", X.columns)
-print("y target:", y.name)
-
-# Train/Test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Scale the features using MinMaxScaler
-scaler = MinMaxScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+# Store feature names before fitting models
+feature_names = X_train.columns.tolist()  # Use X_train instead of X
 
 # Define base models
 models = {
@@ -78,7 +81,6 @@ param_grids = {
         'n_estimators': [50, 100],
         'max_depth': [3, 5, 7],
         'learning_rate': [0.01, 0.1, 0.2]
-
     }
 }
 
@@ -103,14 +105,17 @@ if tune_hyperparameters:
 results = {}
 for name, model in models.items():
     # Fit the model if not already fitted by GridSearchCV
-    if not hasattr(model, 'predict'):  # safety check, though GridSearchCV returns a fitted estimator
+    if not tune_hyperparameters or not hasattr(model, 'predict'):
         model.fit(X_train, y_train)
+    
+    # Predictions on test set
     y_pred = model.predict(X_test)
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
 
+    # Predictions on training set
     y_pred_train = model.predict(X_train)
     r2_train = r2_score(y_train, y_pred_train)
     mae_train = mean_absolute_error(y_train, y_pred_train)
@@ -135,6 +140,18 @@ results_df = results_df.sort_values(by='R2_test', ascending=False)
 print(results_df)
 
 # ------------------------------------------------------
+# Create required directories for plots
+plots_path = 'plots'
+feature_importances_path = os.path.join(plots_path, 'feature_importances')
+predictions_path = os.path.join(plots_path, 'predictions')
+metrics_path = os.path.join(plots_path, 'metrics')
+visualizations_path = os.path.join(plots_path, 'visualizations')
+
+for directory in [plots_path, feature_importances_path, predictions_path, metrics_path, visualizations_path]:
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+# ------------------------------------------------------
 # Plotting results
 
 x = np.arange(len(results_df.index))  # label locations
@@ -150,7 +167,8 @@ plt.ylabel('R2 Score')
 plt.xticks(x, results_df.index, rotation=45)
 plt.legend()
 plt.tight_layout()
-# plt.show()
+plt.savefig(os.path.join(metrics_path, 'r2_scores.png'))
+plt.close()
 
 # MAE Scores
 plt.figure(figsize=(10, 6))
@@ -162,7 +180,8 @@ plt.ylabel('MAE Score')
 plt.xticks(x, results_df.index, rotation=45)
 plt.legend()
 plt.tight_layout()
-# plt.show()
+plt.savefig(os.path.join(metrics_path, 'mae_scores.png'))
+plt.close()
 
 # MSE Scores
 plt.figure(figsize=(10, 6))
@@ -174,7 +193,8 @@ plt.ylabel('MSE Score')
 plt.xticks(x, results_df.index, rotation=45)
 plt.legend()
 plt.tight_layout()
-# plt.show()
+plt.savefig(os.path.join(metrics_path, 'mse_scores.png'))
+plt.close()
 
 # RMSE Scores
 plt.figure(figsize=(10, 6))
@@ -186,27 +206,89 @@ plt.ylabel('RMSE Score')
 plt.xticks(x, results_df.index, rotation=45)
 plt.legend()
 plt.tight_layout()
-# plt.show()
-
-# Plot predictions scatter plots for each model
-for name, model in models.items():
-    y_pred = model.predict(X_test)
-    plt.figure(figsize=(10, 6))
-    plt.scatter(y_test, y_pred)
-    plt.title(f'{name} Predictions')
-    plt.xlabel('True Values')
-    plt.ylabel('Predictions')
-    plt.plot([y.min(), y.max()], [y.min(), y.max()], 'k--', lw=2)
-    plt.xlim(y.min(), y.max())
-    plt.ylim(y.min(), y.max())
-    plt.tight_layout()
-    # plt.show()Đ
+plt.savefig(os.path.join(metrics_path, 'rmse_scores.png'))
+plt.close()
 
 # ------------------------------------------------------
-# Feature Importance
+# Plot predictions scatter plots for each model with train and validation data
+for name, model in models.items():
+    # Get predictions
+    y_pred_test = model.predict(X_test)
+    y_pred_train = model.predict(X_train)
+    y_pred_val = model.predict(X_val)
+    
+    # Create a figure with 2 subplots: one for predictions, one for metrics
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
+    
+    # Plot 1: Scatter plot of predictions
+    ax1.scatter(y_train, y_pred_train, color='blue', alpha=0.5, label='Train')
+    ax1.scatter(y_val, y_pred_val, color='green', alpha=0.5, label='Validation')
+    ax1.scatter(y_test, y_pred_test, color='red', alpha=0.5, label='Test')
+    
+    ax1.set_title(f'{name} Predictions')
+    ax1.set_xlabel('True Values')
+    ax1.set_ylabel('Predictions')
+    
+    # Add the perfect prediction line
+    min_val = min(min(y_test), min(y_pred_test), min(y_train), min(y_pred_train), min(y_val), min(y_pred_val))
+    max_val = max(max(y_test), max(y_pred_test), max(y_train), max(y_pred_train), max(y_val), max(y_pred_val))
+    ax1.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
+    ax1.set_xlim(min_val, max_val)
+    ax1.set_ylim(min_val, max_val)
+    ax1.legend()
+    
+    # Plot 2: Metrics comparison between train, validation, and test
+    # Calculate metrics for validation set
+    r2_val = r2_score(y_val, y_pred_val)
+    mae_val = mean_absolute_error(y_val, y_pred_val)
+    mse_val = mean_squared_error(y_val, y_pred_val)
+    rmse_val = np.sqrt(mse_val)
+    
+    # Get metrics from results dictionary for train and test
+    r2_train = results[name]['R2_train']
+    mae_train = results[name]['MAE_train']
+    mse_train = results[name]['MSE_train']
+    rmse_train = results[name]['RMSE_train']
+    
+    r2_test = results[name]['R2_test']
+    mae_test = results[name]['MAE_test']
+    mse_test = results[name]['MSE_test']
+    rmse_test = results[name]['RMSE_test']
+    
+    # Set up bar chart data
+    metrics = ['R2', 'MAE', 'MSE', 'RMSE']
+    train_values = [r2_train, mae_train, mse_train, rmse_train]
+    val_values = [r2_val, mae_val, mse_val, rmse_val]
+    test_values = [r2_test, mae_test, mse_test, rmse_test]
+    
+    # Bar positions
+    bar_width = 0.25
+    r1 = np.arange(len(metrics))
+    r2 = [x + bar_width for x in r1]
+    r3 = [x + bar_width for x in r2]
+    
+    # Create bars
+    ax2.bar(r1, train_values, width=bar_width, label='Train', color='blue')
+    ax2.bar(r2, val_values, width=bar_width, label='Validation', color='green')
+    ax2.bar(r3, test_values, width=bar_width, label='Test', color='red')
+    
+    # Add labels and legend
+    ax2.set_title(f'{name} Performance Metrics')
+    ax2.set_xticks([r + bar_width for r in range(len(metrics))])
+    ax2.set_xticklabels(metrics)
+    ax2.set_ylabel('Value')
+    ax2.legend()
+    
+    # Add a log scale for better visualization if needed
+    if any(val > 10 * min(filter(lambda x: x > 0, train_values + val_values + test_values)) for val in train_values + val_values + test_values):
+        ax2.set_yscale('log')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(predictions_path, f'{name}_predictions_and_metrics.png'))
+    plt.close()
 
-feature_names = X.columns  # assuming X is a DataFrame
-
+# ------------------------------------------------------
+# Feature Importance analysis
 importances = {}
 for name, model in models.items():
     if hasattr(model, 'feature_importances_'):
@@ -217,20 +299,116 @@ for name, model in models.items():
         importances[name] = None
 
 # For models with valid feature importance, plot them.
-# (Use the original DataFrame columns where applicable.)
-
 for name, importance in importances.items():
     if importance is not None:
         imp = np.array(importance).flatten()
-        plt.figure(figsize=(10, 6))
-        plt.barh(feature_names, imp)  # use the actual feature names
+        plt.figure(figsize=(12, 8))
+        # Sort features by importance
+        indices = np.argsort(imp)
+        plt.barh(range(len(indices)), imp[indices])
+        plt.yticks(range(len(indices)), [feature_names[i] for i in indices])
         plt.title(f'{name} Feature Importance')
         plt.xlabel('Importance')
         plt.ylabel('Feature')
         plt.tight_layout()
-        plt.show()
+        plt.savefig(os.path.join(feature_importances_path, f'{name}_feature_importance.png'))
+        plt.close()
     else:
         print(f'{name} does not have feature importances.')
+
+# ------------------------------------------------------
+# Helper function to format small numbers for better readability
+def format_value(value):
+    if abs(value) < 0.001:
+        return f"{value:.2e}"
+    return f"{value:.4f}"
+
+# Create a combined visualization with all model metrics
+# First, set up the figure based on number of models
+num_models = len(models)
+# Calculate grid dimensions
+cols = min(3, num_models)  # Maximum 3 columns
+rows = (num_models + cols - 1) // cols  # Ceiling division
+
+plt.figure(figsize=(6*cols, 5*rows))
+
+# Plot all models' metrics in a grid
+for i, (name, model) in enumerate(models.items()):
+    ax = plt.subplot(rows, cols, i+1)
+    
+    # Get predictions for all datasets
+    y_pred_test = model.predict(X_test)
+    y_pred_train = model.predict(X_train)
+    y_pred_val = model.predict(X_val)
+    
+    # Calculate metrics
+    metrics = {
+        'Train': {
+            'R²': r2_score(y_train, y_pred_train),
+            'MAE': mean_absolute_error(y_train, y_pred_train),
+            'MSE': mean_squared_error(y_train, y_pred_train),
+            'RMSE': np.sqrt(mean_squared_error(y_train, y_pred_train))
+        },
+        'Val': {
+            'R²': r2_score(y_val, y_pred_val),
+            'MAE': mean_absolute_error(y_val, y_pred_val),
+            'MSE': mean_squared_error(y_val, y_pred_val),
+            'RMSE': np.sqrt(mean_squared_error(y_val, y_pred_val))
+        },
+        'Test': {
+            'R²': r2_score(y_test, y_pred_test),
+            'MAE': mean_absolute_error(y_test, y_pred_test),
+            'MSE': mean_squared_error(y_test, y_pred_test),
+            'RMSE': np.sqrt(mean_squared_error(y_test, y_pred_test))
+        }
+    }
+    
+    # Create a text display of the metrics
+    text = f"{name}\n\n"
+    for dataset, dataset_metrics in metrics.items():
+        text += f"{dataset}:\n"
+        for metric_name, value in dataset_metrics.items():
+            text += f"  {metric_name}: {format_value(value)}\n"
+        text += "\n"
+    
+    # Remove axis ticks and frame
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.axis('off')
+    
+    # Add the text
+    ax.text(0.5, 0.5, text, ha='center', va='center', fontsize=10, 
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+plt.tight_layout()
+plt.savefig(os.path.join(visualizations_path, 'all_models_metrics.png'))
+plt.close()
+
+# Create a combined feature importance plot for all models that support it
+models_with_importance = {name: imp for name, imp in importances.items() if imp is not None}
+if models_with_importance:
+    # Calculate grid dimensions
+    num_models_with_imp = len(models_with_importance)
+    cols = min(2, num_models_with_imp)  # Maximum 2 columns for feature importance
+    rows = (num_models_with_imp + cols - 1) // cols  # Ceiling division
+    
+    plt.figure(figsize=(10*cols, 6*rows))
+    
+    for i, (name, importance) in enumerate(models_with_importance.items()):
+        ax = plt.subplot(rows, cols, i+1)
+        
+        imp = np.array(importance).flatten()
+        # Sort features by importance
+        indices = np.argsort(imp)
+        ax.barh(range(len(indices)), imp[indices])
+        ax.set_yticks(range(len(indices)))
+        ax.set_yticklabels([feature_names[i] for i in indices])
+        ax.set_title(f'{name} Feature Importance')
+        ax.set_xlabel('Importance')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(visualizations_path, 'all_models_feature_importance.png'))
+    plt.close()
 
 # ------------------------------------------------------
 # Save results to CSV

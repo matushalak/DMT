@@ -18,23 +18,15 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from torch import nn
 import torch.optim as optim
 import time
+from datetime import datetime
 
 import json
 import sys
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-
-from ray import tune
-from ray.tune import CLIReporter
-from ray.tune.schedulers import ASHAScheduler
-
-from datetime import datetime
-
-import numpy as np
-import pandas as pd
-import torch
 from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from typing import Optional, Tuple, Dict, List, Union
+
+
 def create_data_split(df, proportion_train=0.7, proportion_val=0.15, split_within_participants=True, seq_length=None):
     """
     Split data into train, validation, and test sets with simplified proportion handling
@@ -49,10 +41,7 @@ def create_data_split(df, proportion_train=0.7, proportion_val=0.15, split_withi
     Returns:
         train_df, val_df, test_df: DataFrames for training, validation, and testing
     """
-    import pandas as pd
-    from sklearn.model_selection import train_test_split
-    import numpy as np
-    
+
     proportion_test = 1 - proportion_train - proportion_val
     
     if split_within_participants:
@@ -230,7 +219,6 @@ def create_data_split(df, proportion_train=0.7, proportion_val=0.15, split_withi
         print(f"Validation: {actual_val_prop:.3f} (target: {proportion_val:.3f})")
         print(f"Test: {actual_test_prop:.3f} (target: {proportion_test:.3f})")
 
-        
     return train_df, val_df, test_df
 
 
@@ -761,13 +749,6 @@ def compare_train_val_predictions(train_model, train_loader, train_dataset,
         title: Title prefix for the plot.
         scaler_type: Type of scaler used ("StandardScaler" or "MinMaxScaler").
     """
-    import torch
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    import os
-    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-    import pandas as pd
     
     # Get predictions for training data
     train_results, train_mae, train_mse, train_rmse, train_r2 = predict_and_plot(

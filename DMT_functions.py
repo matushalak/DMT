@@ -691,47 +691,6 @@ def plot_original_vs_transformed(data, column_name):
     plt.show()
 
 
-def find_negative_values_OG_df(df, drop=False):
-    """
-    Check for negative values in the DataFrame.
-    parameters:
-    df: DataFrame to check
-    drop: if True, drop the rows with negative values
-    returns:
-    df: DataFrame with negative values dropped if drop=True
-    """
-
-    exlude_variables = ["circumplex.valence", "circumplex.arousal"]
-
-    for index, row in df.iterrows():
-        if row["value"] < 0 and row["variable"] not in exlude_variables:
-            # print(row)
-            print(f"Negative value found: {row['value']} for variable {row['variable']} at time {row['time']}")
-            print(f"Participant: {row['id_num']}, Day: {row['time']}")
-            if drop:
-                print("Dropping row...")
-                df = df.drop(index=index)
-    return df
-
-
-# add next day values into next_day_mood column
-def add_next_day_values(df):
-    """
-    Add next day values into next_day_mood column
-    """
-    # create a new column with the next day mood
-    df["next_day_mood"] = df.groupby("id_num")["mood"].shift(-1)
-    # create a new column with the next day date
-    df["next_day"] = df.groupby("id_num")["day"].shift(-1)
-
-    # get day column moved to the 3rd last position
-    cols = df.columns.tolist()
-    cols.insert(-2, cols.pop(cols.index("day")))
-    cols.insert(-1, cols.pop(cols.index("next_day")))
-    df = df[cols]
-    return df
-
-
 def correlate_with_next_day_mood(df):
     """
     Correlate all variables with next_day_mood
@@ -741,7 +700,7 @@ def correlate_with_next_day_mood(df):
     cols.remove("id_num")
     cols.remove("day")
     cols.remove("next_day")
-    cols.remove("next_day_mood")
+    cols.remove("next_mood")
     
     # create a new dataframe with the correlations
     df_corr = pd.DataFrame(columns=["variable", "correlation"])

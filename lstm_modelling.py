@@ -37,7 +37,7 @@ else:
 
 if __name__ == "__main__":
     # Load the dataset
-    dataset_name = "mean_mode_imputation_combinedAppCat"
+    dataset_name = "df_ready_both"
     dropped_vars = [""]
     imputation = "mean_mode"
     df = pd.read_csv(f'tables/preprocessed/{dataset_name}.csv')
