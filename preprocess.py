@@ -4,6 +4,7 @@ import numpy as np
 import os
 from typing import Literal
 import impute as IMP
+from features import engineer_features
 
 # --------- Preprocess pipeline -----------
 def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
@@ -35,12 +36,12 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     print('Imputations complete!')
     
     ### 3) FEATURE ENGINEERING
-    # data = engineer_features(data, method=method)
+    data = engineer_features(data, method=method)
 
     ### 4) add target and crop last day for each participant without target
-    # data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
-    #                            name = method) # saves the DF if name provided
-    # print('Added features!')
+    data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
+                               name = method) # saves the DF if name provided
+    print('Added features!')
     
     return data
 
@@ -241,6 +242,10 @@ def create_pivot(df: pd.DataFrame,
     # remove data without mood
     if remove_no_mood:
         combined = remove_dates_without_VAR(combined, VAR = 'mood_mean_daily')
+        combined = remove_dates_without_VAR(combined, VAR = 'mood_mean_daily', participant=1, 
+                                            start_date="2014-03-21", end_date="2014-05-04")
+        combined = remove_dates_without_VAR(combined, VAR = 'mood_mean_daily', participant =12, 
+                                            start_date="2014-03-27", end_date="2014-05-05")
 
     # rename columns
     combined.rename(columns={
@@ -264,13 +269,18 @@ def create_pivot(df: pd.DataFrame,
 
 
 # works for any variable specified now
-def remove_dates_without_VAR(df: pd.DataFrame, VAR: str, start_date=None, end_date=None):
+def remove_dates_without_VAR(df: pd.DataFrame, VAR: str, participant: int | None = None, start_date=None, end_date=None):
     """
     @urbansirca
     Remove dates from the dataframe. If start and end date aren't provided, 
     it will take the first and the last non-NaN mood value as the cutoffs.
     """
-    participant_ids = df["id_num"].unique().tolist()
+    # if no participant provided, then do it for all participants
+    if participant is None:
+        participant_ids = df["id_num"].unique().tolist()
+    else:
+        participant_ids = [participant]
+
 
     for specific_id in participant_ids:
         # df for an individual with mood values present
@@ -477,4 +487,4 @@ def sort_pivot_columns(cols):
 
 
 if __name__ == '__main__':
-    preprocess_pipeline(method='both')
+    preprocess_pipeline(method='date')
