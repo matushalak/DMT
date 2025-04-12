@@ -25,6 +25,7 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     data = create_pivot(data, method=method, remove_no_mood= remove_no_mood, 
                         load_from_file=load_from_file)
     print('Basic preprocessing done!')
+    
     ### 2) IMPUTATIONS
     # get categories of variables for different imputations
     imput_categories = IMP.categories(data.columns)
@@ -34,12 +35,12 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     print('Imputations complete!')
     
     ### 3) FEATURE ENGINEERING
-    # data = engineer_features(data)
+    # data = engineer_features(data, method=method)
 
     ### 4) add target and crop last day for each participant without target
-    data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
-                               name = method) # saves the DF if name provided
-    print('Added features!')
+    # data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
+    #                            name = method) # saves the DF if name provided
+    # print('Added features!')
     
     return data
 
@@ -145,15 +146,11 @@ def create_pivot(df: pd.DataFrame,
                 
             else:
                 pivot_part_daily = df_agg.pivot_table(index= 'date', 
-                                                        columns="variable", 
-                                                        values="value", aggfunc= aggregation)
+                                                    columns="variable", 
+                                                    values="value", aggfunc= aggregation)
                 
                 pivot_part_daily = pivot_part_daily.add_suffix(f'_{aggregation}_daily')
 
-            # NOTE: For sum aggregations NaN = 0
-            # if aggregation == 'sum':
-            #     pivot_part_daily = pivot_part_daily.fillna(0)
-            
             # Make sure the daily pivot index is datetime and reset_index for merging:
             pivot_part_daily = pivot_part_daily.reindex(full_range)
             pivot_part_daily.index.name = "date"
@@ -247,8 +244,8 @@ def create_pivot(df: pd.DataFrame,
 
     # rename columns
     combined.rename(columns={
-        'wakeup_time_first_daily':'wake_time',
-        'bed_time_last_daily': 'bed_time',
+        'bed_time_last_daily': 'bed_time_daily',
+        'wakeup_time_first_daily': 'wake_time_daily',
         'month_first_daily' : 'month',
         'weekday_first_daily' : 'weekday'}, inplace=True)
     

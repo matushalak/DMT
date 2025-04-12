@@ -78,7 +78,8 @@ def categories(columns):
         # interpolation columns
         elif any(interp in col for interp in ('mood', 'circumplex',
                                               'activity', 'screen',
-                                              'wake', 'bed')):
+                                              'wake', 'bed'
+                                              )):
             interp_imp.append(col)
 
     return sum_imp, mean_imp, mode_imp, interp_imp
