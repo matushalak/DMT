@@ -21,8 +21,8 @@ from ray import tune
 from ray.tune import CLIReporter
 from ray.tune.schedulers import ASHAScheduler
 
-from lstm_utils import MultiParticipantDataset, LSTMModel, SimpleRNNModel, GRUModel
-from lstm_utils import predict_and_plot, create_data_split, train_and_evaluate
+from lstm_utils import LSTMModel, SimpleRNNModel, GRUModel
+from lstm_utils import predict_and_plot, train_and_evaluate
 from lstm_utils import save_model, load_model, simple_hyperparameter_tuning
 
 
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     dataset_name = "df_ready_both"
     dropped_vars = [""]
     imputation = "mean_mode"
-    df = pd.read_csv(f'tables/preprocessed/{dataset_name}.csv')
+    df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 
     do_hyperparameter_tuning = False  # Set to True to enable tuning
     
@@ -48,11 +48,11 @@ if __name__ == "__main__":
     # Default hyperparameters
     config = {
         # Data parameters
-        "seq_length": 7,                        # Number of days to use for prediction
+        "seq_length": 15,                        # Number of days to use for prediction
         "batch_size": 32,                       # Batch size for training
         
         # Model architecture
-        "model_type": "GRU",                   # Model type (LSTM, GRU, or SimpleRNN)
+        "model_type": "SimpleRNN",                   # Model type (LSTM, GRU, or SimpleRNN)
         "hidden_dim": 64,                       # Size of LSTM hidden layer
         "num_layers": 2,                        # Number of LSTM layers
         "dropout": 0.3,                         # Dropout rate
@@ -60,12 +60,12 @@ if __name__ == "__main__":
         # Training parameters
         "learning_rate": 0.001,                 # Learning rate for Adam optimizer
         "num_epochs": 20,                       # Maximum number of training epochs
-        "clip_gradients": True,                 # Whether to use gradient clipping
+        "clip_gradients": False,                 # Whether to use gradient clipping
         "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
         
         # Data processing
         "transform_features": True,             # Whether to normalize features
-        "transform_target": True,               # Whether to normalize target
+        "transform_target": False,               # Whether to normalize target
         "scaler_type": "StandardScaler",        # Scaler type (StandardScaler or MinMaxScaler)
         "shuffle_data": True,                   # Whether to shuffle training data
         
@@ -78,29 +78,7 @@ if __name__ == "__main__":
     os.makedirs("models", exist_ok=True)
     os.makedirs("figures", exist_ok=True)
     
-    # Data split
-    train_df, val_df, test_df = create_data_split(
-        df, 
-        proportion_train=0.8, 
-        proportion_val=0.1, 
-        split_within_participants=True,
-        seq_length=config["seq_length"]
-    )
-    
-    # Print dataset sizes
-    print(f"Train set: {len(train_df)} samples")
-    print(f"Validation set: {len(val_df)} samples")
-    print(f"Test set: {len(test_df)} samples")
-    
-    # Print mood descriptives
-    print("\nTrain mood descriptives")
-    print(train_df["mood"].describe())
-    print("\nValidation mood descriptives")
-    print(val_df["mood"].describe())
-    print("\nTest mood descriptives")
-    print(test_df["mood"].describe())
-    
-    # Choose whether to perform hyperparameter tuning
+
     
     if do_hyperparameter_tuning:
 
@@ -132,7 +110,7 @@ if __name__ == "__main__":
         }
         # Run hyperparameter tuning
         best_config = simple_hyperparameter_tuning(
-            train_df, val_df, test_df,
+            df,
             dataset_name, imputation, dropped_vars,
             default_config=config,
             param_grid=param_grid,
@@ -146,15 +124,17 @@ if __name__ == "__main__":
     # Train and evaluate with the selected configuration
     metrics = train_and_evaluate(
         config, 
-        train_df=train_df, 
-        val_df=val_df, 
-        test_df=test_df,
-        dataset_name=dataset_name,
-        imputation=imputation,
-        dropped_vars=dropped_vars,
-        save_fig=True,
+        df, 
+        checkpoint_dir=None, 
+        dataset_name=None, 
+        imputation=imputation, 
+        dropped_vars=dropped_vars, 
+        save_fig=True
     )
     
     print("Final evaluation metrics:")
     for key, value in metrics.items():
-        print(f"{key}: {value:.4f}")
+        # dont print predictions_
+        if "predictions_" in key or "actuals_" in key:
+            continue
+        print(f"{key}: {value}")

@@ -555,7 +555,6 @@ def correlate_with_next_day_mood(df):
     return df_corr
 
 
-
 def remove_dates_without_mood(df, participant=None, start_date=None, end_date=None):
     """
     Remove dates from the dataframe. If start and end date aren't provided, 
