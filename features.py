@@ -36,6 +36,9 @@ def engineer_features(preprocessed_df: pd.DataFrame, method: str,
     if method == 'both':
         todDF = mva(todDF, vars_mvaTOD, mvaN=mvaN)
     
+    # 4.5 Add categorical target
+    dailyDF = categorical_target(dailyDF, x_daily_SD=.5)
+
     # 5) Combine daily and time of day dataframes
     if method == 'both':
         dfCombined = todDF.merge(dailyDF,
@@ -147,6 +150,22 @@ def mva(df:pd.DataFrame, vars: tuple[str], mvaN: int) -> pd.DataFrame:
     
     assert all(df.isna().sum()) == 0, 'Still some NaNs!!!'
     return df
+
+
+def categorical_target(df:pd.DataFrame, x_daily_SD: float = 0.7) -> pd.DataFrame:
+    same = (df['change_mood_mean_daily'] <= x_daily_SD * df['mva7_mood_std_daily']) & (df['change_mood_mean_daily'] >= -x_daily_SD * df['mva7_mood_std_daily'])
+    higher = (df['change_mood_mean_daily'] > x_daily_SD * df['mva7_mood_std_daily'])
+    lower = (df['change_mood_mean_daily'] < -x_daily_SD * df['mva7_mood_std_daily'])
+
+    cat_target = np.zeros(df.shape[0])
+    cat_target[same] = 0
+    cat_target[higher] = 1
+    cat_target[lower] = -1
+
+    df['categorical_target'] = cat_target 
+    return df
+
+
 
 # ------- utils --------
 def separate_date_and_tod(tod_data:pd.DataFrame
