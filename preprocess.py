@@ -4,6 +4,7 @@ import numpy as np
 import os
 from typing import Literal
 import impute as IMP
+from features import engineer_features
 
 # --------- Preprocess pipeline -----------
 def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
@@ -35,7 +36,7 @@ def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
     print('Imputations complete!')
     
     ### 3) FEATURE ENGINEERING
-    # data = engineer_features(data, method=method)
+    data = engineer_features(data, method=method)
 
     ### 4) add target and crop last day for each participant without target
     data = add_next_day_values(data, shift= -3 if method != 'date' else -1,
@@ -486,4 +487,4 @@ def sort_pivot_columns(cols):
 
 
 if __name__ == '__main__':
-    preprocess_pipeline(method='both')
+    preprocess_pipeline(method='date')

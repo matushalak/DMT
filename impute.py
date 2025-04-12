@@ -30,7 +30,7 @@ def interpolate(df: pd.DataFrame, columns, method='linear', order=2):
     fixed by Caude
     """
     print("Shape before interpolation:", df.shape)
-    print("NaNs in interpolation columns before:", df[columns].isna().sum())
+    # print("NaNs in interpolation columns before:", df[columns].isna().sum())
     
     # Create a copy of the original dataframe to avoid modifying the input
     df_result = df.copy()
@@ -93,7 +93,7 @@ def interpolate(df: pd.DataFrame, columns, method='linear', order=2):
                     df_result.loc[part, col] = interpolated
     
     print("Shape after interpolation:", df_result.shape)
-    print("NaNs in interpolation columns after:", df_result[columns].isna().sum())
+    # print("NaNs in interpolation columns after:", df_result[columns].isna().sum())
     return df_result
 
 # all at once
