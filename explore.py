@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import seaborn as sns
 from preprocess import preprocess_df, preprocess_pipeline
 import os
 
@@ -16,6 +17,50 @@ def main():
     # After excluding flatlining variables, explore wake and bed times 
     # (no change w times of day, consistently values in middle of the night)
     explore_sleep()
+
+
+def explore_correlations():
+    df = preprocess_pipeline(load_from_file=True, method='date')
+    # Compute the correlation matrix
+    corr = df.corr()
+
+    # Generate a mask for the upper triangle
+    mask = np.triu(np.ones_like(corr, dtype=bool))
+
+    # Set up the figure
+    f, ax = plt.subplots(figsize=(10, 10))
+
+    # Draw the heatmap with the mask and correct aspect ratio
+    sns.heatmap(corr, mask=mask, vmax=.3, center=0, cmap='rocket',
+                square=True, linewidths=2, cbar_kws={"shrink": .5},
+                robust=True, ax=ax)
+
+    # Get the number of columns from the correlation matrix
+    n_cols = len(corr.columns)
+    # Create new labels as simple numbers (0, 1, 2, ..., n-1)
+    new_labels = list(map(str, range(n_cols)))
+    
+    # Set the tick locations to match exactly the number of columns.
+    ax.set_xticks(np.arange(n_cols))
+    ax.set_yticks(np.arange(n_cols))
+    
+    # Replace tick labels with the new numeric labels.
+    ax.set_xticklabels(new_labels, rotation=45, ha="right", fontsize = 6)
+    ax.set_yticklabels(new_labels, rotation=0, fontsize = 8)
+    
+    # Instead of legend patches, add a text description mapping numbers to column names.
+    mapping_text = "\n".join([f"{i}: {col}" for i, col in enumerate(corr.columns)])
+    # Place the mapping text at the bottom right of the figure
+    ax.text(
+        0.5, 0.99, mapping_text,
+        transform=ax.transAxes,
+        fontsize = 5,
+        bbox=dict(facecolor='white', alpha=0.7, pad=5),
+        ha='left', va='top'  # adjust alignment
+    )
+    
+    plt.tight_layout()
+    plt.show()
 
 def explore_hourly_trends():
     df = preprocess_df()
@@ -88,4 +133,7 @@ def explore_hours():
 
 
 if __name__ == '__main__':
-    main()
+    # Cross corrrelations of features
+    explore_correlations()
+    
+    # main()
