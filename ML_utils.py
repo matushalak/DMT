@@ -51,7 +51,11 @@ def normalize_data_and_split(
           - scalers: Dictionary containing the scaler(s) used.
           - metadata: Dictionary containing information for reconstruction and plotting.
     """
+    # sort_cols = [id_col, date_col]
+    # if "time_of_day_nonencoded" in df.columns:
+    #     sort_cols.append("time_of_day_nonencoded")
 
+    # df.sort_values(by=sort_cols, inplace=True)
     
     # Initialize scalers dict and metadata dict
     scalers = {}

@@ -42,12 +42,12 @@ df_numeric = df.select_dtypes(include=[np.number])
 correlations = df_numeric.corr()
 correlation_with_target = correlations["target"].sort_values(ascending=False)
 correlation_with_CATtarget = correlations["categorical_target"].sort_values(ascending=False)
-# print("Correlation with REGRESSION target:")
-# print(correlation_with_target)
-# print("Correlation with CLASSIFICATION target:")
-# print(correlation_with_CATtarget)
+print("Correlation with REGRESSION target:")
+print(correlation_with_target)
+print("Correlation with CLASSIFICATION target:")
+print(correlation_with_CATtarget)
 
-# # drop any feature with less than 0.1 correlation with target
+# drop any feature with less than 0.1 correlation with target
 # threshold = 0.0
 # features_to_drop = correlation_with_target[abs(correlation_with_target) < threshold].index.tolist()
 # # features_to_drop.remove("target")  # Remove target from the list
@@ -56,6 +56,12 @@ correlation_with_CATtarget = correlations["categorical_target"].sort_values(asce
 # # Drop the features from the dataset
 # df.drop(columns=features_to_drop, inplace=True)
 
+# combine all app.Categorical features into one
+df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
+# Drop individual app.Categorical features
+df.drop(columns=df.columns[df.columns.str.contains('appCat')], inplace=True)
+
+        
 
 # Remove features that should not be used in the model
 features = df.columns.to_list()
@@ -426,6 +432,8 @@ for name, importance in importances.items():
     else:
         print(f'{name} does not have feature importances.')
 
+
+
 # ------------------------------------------------------
 # Helper function to format small numbers for better readability
 def format_value(value):
@@ -472,3 +480,23 @@ for i, (name, model) in enumerate(models.items()):
             'RMSE': np.sqrt(mean_squared_error(y_test, y_pred_test))
         }
     }
+
+
+
+# display most important features for each model
+for name, importance in importances.items():
+    if importance is not None:
+        imp = np.array(importance).flatten()
+        indices = np.argsort(imp)[::-1]  # Sort in descending order
+        print(f"Top features for {name}:")
+        for i in range(min(10, len(indices))):  # Display top 10 features
+            print(f"{feature_names[indices[i]]}: {format_value(imp[indices[i]])}")
+        # print also the list of top features
+        print("\n")
+        try:
+            print(f"Feature list: {[feature_names[i] for i in indices]}")
+        except IndexError:
+            print("Error: Feature names do not match the indices of feature importances.")
+        print("\n")
+    else:
+        print(f'{name} does not have feature importances.')
