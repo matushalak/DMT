@@ -56,6 +56,8 @@ def normalize_data_and_split(
     #     sort_cols.append("time_of_day_nonencoded")
 
     # df.sort_values(by=sort_cols, inplace=True)
+
+    
     
     # Initialize scalers dict and metadata dict
     scalers = {}

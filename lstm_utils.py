@@ -43,6 +43,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any
 
+
 def sort_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
     Sort dataframe by participant ID, date, and time of date.
@@ -699,143 +700,6 @@ class SimpleRNNModel(nn.Module):
         return out
 # ------------------------------------------------------
 
-
-def predict_and_plot(model, data_loader, test_dataset, target_scaler=None, show_plot=True, 
-                  save_fig=True, title="predictions", scaler_type="StandardScaler"):
-    """
-    Runs predictions on the data_loader using model, builds a results DataFrame using the
-    test_dataset's original data (which includes the 'date' and 'id_num' columns), and then plots
-    real vs predicted values for all participants using matplotlib/seaborn.
-
-    Parameters:
-        model: Trained PyTorch model.
-        data_loader: DataLoader for the dataset to predict on.
-        test_dataset: The dataset instance (e.g., MultiParticipantDataset) used to create data_loader.
-                      It must have a 'data' attribute containing the original DataFrame with a 'date' column.
-        target_scaler: (Optional) Scaler used to normalize the target data.
-        show_plot: Whether to display the plot.
-        save_fig: Whether to save the figure to disk.
-        title: Title prefix for the plot.
-        scaler_type: Type of scaler used ("StandardScaler" or "MinMaxScaler").
-    """
-
-    
-    model.eval()
-    all_predictions = []
-    all_targets = []
-
-    # move everything to cpu
-    model.to("cpu")
-    
-    # Run model predictions over the data_loader
-    with torch.no_grad():
-        for batch in data_loader:
-            x_features, x_id, y = batch
-            x_features = x_features.to("cpu")
-            x_id = x_id.to("cpu")
-            y = y.to("cpu")
-            outputs = model(x_features)
-            all_predictions.append(outputs.cpu().numpy())
-            all_targets.append(y.cpu().numpy())
-    
-    # Concatenate all predictions and targets into arrays
-    all_predictions = np.concatenate(all_predictions)
-    all_targets = np.concatenate(all_targets)
-
-    
-    # Inverse transform if a target scaler is provided
-    if target_scaler is not None:
-        if scaler_type == "StandardScaler":
-            print("Target scaler mean:", target_scaler.mean_)
-            print("Target scaler scale:", target_scaler.scale_)
-            print("Inverse transforming predictions and targets using StandardScaler")
-        else:
-            print("Inverse transforming predictions and targets using MinMaxScaler")
-
-        all_predictions = target_scaler.inverse_transform(all_predictions)
-        all_targets = target_scaler.inverse_transform(all_targets.reshape(-1, 1))
-    
-
-    # Print statistics of predictions and targets
-    print("Predictions for", title)
-    print("Predictions mean:", np.mean(all_predictions))
-    print("Predictions sd:", np.std(all_predictions))
-    print("Predictions min:", np.min(all_predictions))
-    print("Predictions max:", np.max(all_predictions))
-    print("Targets mean:", np.mean(all_targets))
-    print("Targets sd:", np.std(all_targets))
-    print("Targets min:", np.min(all_targets))
-    print("Targets max:", np.max(all_targets))
-    
-    # Compute the correct slice of the original DataFrame
-    # The i-th prediction corresponds to data row at index (i + seq_length)
-    start_idx = test_dataset.seq_length
-    end_idx = start_idx + len(test_dataset)
-    df_results = test_dataset.data.iloc[start_idx:end_idx].copy().reset_index(drop=True)
-
-    # Add prediction and target columns to the results DataFrame
-    df_results['Real'] = all_targets.reshape(-1)
-    df_results['Predicted'] = all_predictions.reshape(-1)
-    
-    # Get unique participant IDs from the results DataFrame
-    participant_col = test_dataset.id_col  # e.g., 'id_num'
-    participants = df_results[participant_col].unique()
-    
-    # Create a figure with subplots for each participant
-    n_participants = len(participants)
-    fig, axes = plt.subplots(n_participants, 1, figsize=(12, 4 * n_participants), constrained_layout=True)
-    
-    # If there's only one participant, axes won't be an array, so convert it to a list
-    if n_participants == 1:
-        axes = [axes]
-    
-    # Plot real and predicted values for each participant
-    for i, p in enumerate(participants):
-        df_p = df_results[df_results[participant_col] == p]
-        
-        # Sort by date to ensure proper line plotting
-        df_p = df_p.sort_values('date')
-        
-        # Plot real values
-        sns.lineplot(x='date', y='Real', data=df_p, ax=axes[i], label='Real', marker='o')
-        
-        # Plot predicted values
-        sns.lineplot(x='date', y='Predicted', data=df_p, ax=axes[i], label='Predicted', marker='x')
-        
-        # Customize plot
-        axes[i].set_title(f'Participant {p}')
-        axes[i].set_xlabel('date')
-        # rotate x-axis labels
-        axes[i].tick_params(axis='x', rotation=45)
-        axes[i].set_ylabel('Mood Value')
-        axes[i].legend()
-        axes[i].grid(True, linestyle='--', alpha=0.7)
-    
-    # Add an overall title to the figure
-    fig.suptitle(f'Real vs Predicted Mood Values\n{title}', fontsize=16)
-    
-    # Display the plot if requested
-    if show_plot:
-        plt.show()
-    
-    # Save the figure if requested
-    if save_fig:
-        outdir = "figures/matplotlib/predictions"
-        os.makedirs(outdir, exist_ok=True)
-        fig.savefig(os.path.join(outdir, f"predictions_{title}.png"), dpi=300, bbox_inches='tight')
-        print(f"Figure saved to {os.path.join(outdir, f'predictions_{title}.png')}")
-    
-    # Calculate metrics
-    mae = mean_absolute_error(all_targets, all_predictions)
-    mse = mean_squared_error(all_targets, all_predictions)
-    rmse = np.sqrt(mse)
-    r2 = r2_score(all_targets, all_predictions)
-    print(f"MAE: {mae}, RMSE: {rmse}, R2: {r2}")
-    
-    return df_results, mae, mse, rmse, r2
-
-
-
 def save_model(model, hyperparams, metrics, path="models"):
     """
     Save model, hyperparameters, and metrics
@@ -1352,8 +1216,14 @@ def train_and_evaluate(
     if not os.path.exists(results_path):
         results_df.to_csv(results_path, index=True, header=True)
     else:
+
         results_df.to_csv(results_path, mode='a', header=False, index=True)
 
+    predict_and_plot_simple(
+        model=model,
+        train_loader=train_loader,
+        test_loader=test_loader,
+        target_scaler=scaler_target)
 
     if save_fig:
         # Generate plots for each data split
@@ -2169,143 +2039,215 @@ def plot_participant_timeseries(model,
     
     return results, participant_metrics
 
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import os
 
-def compare_split_metrics(train_metrics=None, val_metrics=None, test_metrics=None,
-                      target_col='target', figsize=(12, 10), save_path=None):
+def predict_and_plot_simple(model, train_loader, test_loader, target_scaler=None):
     """
-    Create plots comparing metrics across different data splits for each participant.
+    A simple function to get predictions from a model and plot the results.
     
-    Parameters:
-        train_metrics: Dictionary with training metrics per participant
-        val_metrics: Dictionary with validation metrics per participant
-        test_metrics: Dictionary with test metrics per participant
-        target_col: Name of the target column being predicted
-        figsize: Size of the figure
-        save_path: Path to save the comparison plot
-        
-    Returns:
-        DataFrame with combined metrics
+    Args:
+        model: The trained PyTorch model
+        train_loader: DataLoader for training data
+        test_loader: DataLoader for test data
+        target_scaler: Optional scaler to inverse transform predictions
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import pandas as pd
-    import os
-    import seaborn as sns
-    
-    # Set style
-    sns.set_style("whitegrid")
-    
-    # Get all unique participant IDs
-    all_participants = set()
-    
-    if train_metrics:
-        all_participants.update(train_metrics.keys())
-    if val_metrics:
-        all_participants.update(val_metrics.keys())
-    if test_metrics:
-        all_participants.update(test_metrics.keys())
-    
-    all_participants = sorted(list(all_participants))
-    
-    if not all_participants:
-        print("No participants found.")
-        return pd.DataFrame()
-    
-    # Create a DataFrame for visualization
-    data = []
-    
-    for p_id in all_participants:
-        # Training metrics
-        if train_metrics and p_id in train_metrics:
-            data.append({
-                'participant_id': p_id,
-                'split': 'Train',
-                'MAE': train_metrics[p_id]['mae'],
-                'RMSE': train_metrics[p_id]['rmse'],
-                'R²': train_metrics[p_id]['r2'] if not np.isnan(train_metrics[p_id]['r2']) else 0,
-                'has_r2': not np.isnan(train_metrics[p_id]['r2']),
-                'samples': train_metrics[p_id]['n_samples']
-            })
+    def get_predictions(loader):
+        model.eval()
+        predictions = []
+        targets = []
+        participant_ids = []
         
-        # Validation metrics
-        if val_metrics and p_id in val_metrics:
-            data.append({
-                'participant_id': p_id,
-                'split': 'Validation',
-                'MAE': val_metrics[p_id]['mae'],
-                'RMSE': val_metrics[p_id]['rmse'],
-                'R²': val_metrics[p_id]['r2'] if not np.isnan(val_metrics[p_id]['r2']) else 0,
-                'has_r2': not np.isnan(val_metrics[p_id]['r2']),
-                'samples': val_metrics[p_id]['n_samples']
-            })
+        with torch.no_grad():
+            for batch in loader:
+                # Handle different batch formats (with or without mask)
+                if len(batch) == 4:  # (features, participant_ids, targets, masks)
+                    x, pid, y, _ = batch
+                else:  # (features, participant_ids, targets)
+                    x, pid, y = batch
+                
+                # Move to CPU
+                x = x.cpu()
+                y = y.cpu()
+                pid = pid.cpu()
+                
+                # Get predictions
+                output = model(x)
+                
+                # Append to lists
+                predictions.append(output.cpu().numpy())
+                targets.append(y.numpy())
+                participant_ids.append(pid[:, 0].numpy())  # Get first ID from each sequence
         
-        # Test metrics
-        if test_metrics and p_id in test_metrics:
-            data.append({
-                'participant_id': p_id,
-                'split': 'Test',
-                'MAE': test_metrics[p_id]['mae'],
-                'RMSE': test_metrics[p_id]['rmse'],
-                'R²': test_metrics[p_id]['r2'] if not np.isnan(test_metrics[p_id]['r2']) else 0,
-                'has_r2': not np.isnan(test_metrics[p_id]['r2']),
-                'samples': test_metrics[p_id]['n_samples']
-            })
+        # Concatenate results
+        predictions = np.concatenate(predictions)
+        targets = np.concatenate(targets)
+        participant_ids = np.concatenate(participant_ids)
+        
+        # Reshape for transformation
+        predictions_2d = predictions.reshape(-1, 1)
+        targets_2d = targets.reshape(-1, 1)
+        
+        # Handle inverse transformation carefully
+        if target_scaler is not None:
+            try:
+                # Case 1: Direct scaler with inverse_transform method
+                if hasattr(target_scaler, 'inverse_transform'):
+                    predictions = target_scaler.inverse_transform(predictions_2d).flatten()
+                    targets = target_scaler.inverse_transform(targets_2d).flatten()
+                    print("Applied direct inverse transformation")
+                
+                # Case 2: Dictionary with 'target' key containing sub-dictionary of participant scalers
+                elif isinstance(target_scaler, dict) and 'target' in target_scaler:
+                    if isinstance(target_scaler['target'], dict):
+                        # Per-participant scaling
+                        print("Applying per-participant inverse transformation")
+                        inversed_preds = np.zeros_like(predictions_2d)
+                        inversed_targets = np.zeros_like(targets_2d)
+                        
+                        # Count how many participants we're processing
+                        unique_pids = np.unique(participant_ids)
+                        print(f"Processing {len(unique_pids)} unique participants")
+                        
+                        for pid in unique_pids:
+                            if pid in target_scaler['target']:
+                                mask = participant_ids == pid
+                                scaler = target_scaler['target'][pid]
+                                inversed_preds[mask] = scaler.inverse_transform(predictions_2d[mask])
+                                inversed_targets[mask] = scaler.inverse_transform(targets_2d[mask])
+                                
+                        predictions = inversed_preds.flatten()
+                        targets = inversed_targets.flatten()
+                    
+                    # Case 3: Dictionary with 'target' key containing a single scaler
+                    elif hasattr(target_scaler['target'], 'inverse_transform'):
+                        print("Applying global inverse transformation from target key")
+                        predictions = target_scaler['target'].inverse_transform(predictions_2d).flatten()
+                        targets = target_scaler['target'].inverse_transform(targets_2d).flatten()
+                
+                # Case 4: Dictionary with direct scalers as values
+                elif isinstance(target_scaler, dict) and len(target_scaler) > 0:
+                    # Try using first key's scaler as a fallback
+                    first_key = list(target_scaler.keys())[0]
+                    print(f"Using '{first_key}' key as fallback for inverse transformation")
+                    
+                    if hasattr(target_scaler[first_key], 'inverse_transform'):
+                        predictions = target_scaler[first_key].inverse_transform(predictions_2d).flatten()
+                        targets = target_scaler[first_key].inverse_transform(targets_2d).flatten()
+                    else:
+                        print("WARNING: No inverse_transform method found. Using raw values.")
+                
+                else:
+                    print("WARNING: Unrecognized scaler structure. Using raw values.")
+                    predictions = predictions_2d.flatten()
+                    targets = targets_2d.flatten()
+                    
+            except Exception as e:
+                print(f"Error during inverse transformation: {str(e)}")
+                print("Using raw values instead.")
+                predictions = predictions_2d.flatten()
+                targets = targets_2d.flatten()
+        else:
+            # No scaler provided
+            predictions = predictions_2d.flatten()
+            targets = targets_2d.flatten()
+        
+        return predictions, targets, participant_ids
     
-    df = pd.DataFrame(data)
+    # Move model to CPU for inference
+    model.to("cpu")
     
-    # Create the figure
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    # Get predictions for train and test sets
+    print("Processing training data...")
+    y_pred_train, y_true_train, pid_train = get_predictions(train_loader)
     
-    # Plot 1: MAE by participant and split
-    sns.barplot(x='participant_id', y='MAE', hue='split', data=df, ax=axes[0, 0])
-    axes[0, 0].set_title('Mean Absolute Error by Participant')
-    axes[0, 0].set_xlabel('Participant ID')
-    axes[0, 0].set_ylabel('MAE')
+    print("Processing test data...")  
+    y_pred_test, y_true_test, pid_test = get_predictions(test_loader)
     
-    # Plot 2: RMSE by participant and split
-    sns.barplot(x='participant_id', y='RMSE', hue='split', data=df, ax=axes[0, 1])
-    axes[0, 1].set_title('Root Mean Squared Error by Participant')
-    axes[0, 1].set_xlabel('Participant ID')
-    axes[0, 1].set_ylabel('RMSE')
+    # Function to calculate and print metrics
+    def print_stats(y_true, y_pred, label=""):
+        print(f"\n{label} Descriptive Statistics:")
+        print(f"Predictions - Mean: {np.mean(y_pred):.2f}, Std: {np.std(y_pred):.2f}, Min: {np.min(y_pred):.2f}, Max: {np.max(y_pred):.2f}")
+        print(f"Targets     - Mean: {np.mean(y_true):.2f}, Std: {np.std(y_true):.2f}, Min: {np.min(y_true):.2f}, Max: {np.max(y_true):.2f}")
+        
+        mae = mean_absolute_error(y_true, y_pred)
+        mse = mean_squared_error(y_true, y_pred)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(y_true, y_pred)
+        
+        print(f"{label} MAE: {mae:.3f}, MSE: {mse:.3f}, RMSE: {rmse:.3f}, R2: {r2:.3f}")
+        return mae, mse, rmse, r2
     
-    # Plot 3: R² by participant and split (only for valid R² values)
-    r2_df = df[df['has_r2']]
-    if len(r2_df) > 0:
-        sns.barplot(x='participant_id', y='R²', hue='split', data=r2_df, ax=axes[1, 0])
-        axes[1, 0].set_title('R² Score by Participant')
-        axes[1, 0].set_xlabel('Participant ID')
-        axes[1, 0].set_ylabel('R²')
-    else:
-        axes[1, 0].text(0.5, 0.5, 'No valid R² values available', 
-                      horizontalalignment='center', verticalalignment='center',
-                      transform=axes[1, 0].transAxes)
+    # Print metrics
+    train_mae, train_mse, train_rmse, train_r2 = print_stats(y_true_train, y_pred_train, "Train")
+    test_mae, test_mse, test_rmse, test_r2 = print_stats(y_true_test, y_pred_test, "Test")
     
-    # Plot 4: Sample count by participant and split
-    sns.barplot(x='participant_id', y='samples', hue='split', data=df, ax=axes[1, 1])
-    axes[1, 1].set_title('Number of Samples by Participant')
-    axes[1, 1].set_xlabel('Participant ID')
-    axes[1, 1].set_ylabel('Sample Count')
+    # Create plot directory if it doesn't exist
+    os.makedirs("figures/simple_plots", exist_ok=True)
     
-    plt.suptitle(f'Comparison of Model Performance Across Data Splits\n{target_col.capitalize()} Prediction', 
-               fontsize=16)
+    # Plot predictions vs. ground truth
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8))
     
+    # Train set
+    axes[0].plot(y_true_train, label="Real", color="blue", alpha=0.7)
+    axes[0].plot(y_pred_train, label="Predicted", color="red", alpha=0.7, linestyle="--")
+    axes[0].set_title(f"Train Set: Real vs Predicted (R² = {train_r2:.3f})")
+    axes[0].legend()
+    axes[0].grid(True, linestyle='--', alpha=0.5)
+    
+    # Test set
+    axes[1].plot(y_true_test, label="Real", color="blue", alpha=0.7)
+    axes[1].plot(y_pred_test, label="Predicted", color="red", alpha=0.7, linestyle="--")
+    axes[1].set_title(f"Test Set: Real vs Predicted (R² = {test_r2:.3f})")
+    axes[1].legend()
+    axes[1].grid(True, linestyle='--', alpha=0.5)
+    
+    # Add labels
+    fig.text(0.5, 0.01, "Sample Index", ha="center", fontsize=12)
+    fig.text(0.01, 0.5, "Target Value", va="center", rotation="vertical", fontsize=12)
+    
+    # Adjust layout and save
     plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
+    plt.savefig("figures/simple_plots/predictions_comparison.png", dpi=300, bbox_inches="tight")
     
-    # Save the figure if requested
-    if save_path is not None:
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved comparison plot to {save_path}")
-    else:
-        # Use default path
-        save_dir = "figures/comparisons"
-        os.makedirs(save_dir, exist_ok=True)
-        default_path = os.path.join(save_dir, "split_comparison.png")
-        plt.savefig(default_path, dpi=300, bbox_inches='tight')
-        print(f"Saved comparison plot to {default_path}")
+    # Create scatter plots
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     
-    plt.show()
+    # Train set scatter
+    axes[0].scatter(y_true_train, y_pred_train, alpha=0.5, color="blue")
+    min_val = min(np.min(y_true_train), np.min(y_pred_train))
+    max_val = max(np.max(y_true_train), np.max(y_pred_train))
+    axes[0].plot([min_val, max_val], [min_val, max_val], 'r--')
+    axes[0].set_title(f"Train Set: Actual vs Predicted (R² = {train_r2:.3f})")
+    axes[0].set_xlabel("Actual Values")
+    axes[0].set_ylabel("Predicted Values")
+    axes[0].grid(True, linestyle='--', alpha=0.5)
     
-    return df
+    # Test set scatter
+    axes[1].scatter(y_true_test, y_pred_test, alpha=0.5, color="blue")
+    min_val = min(np.min(y_true_test), np.min(y_pred_test))
+    max_val = max(np.max(y_true_test), np.max(y_pred_test))
+    axes[1].plot([min_val, max_val], [min_val, max_val], 'r--')
+    axes[1].set_title(f"Test Set: Actual vs Predicted (R² = {test_r2:.3f})")
+    axes[1].set_xlabel("Actual Values")
+    axes[1].set_ylabel("Predicted Values")
+    axes[1].grid(True, linestyle='--', alpha=0.5)
+    
+    # Save scatter plot
+    plt.tight_layout()
+    plt.savefig("figures/simple_plots/scatter_comparison.png", dpi=300, bbox_inches="tight")
+    
+    # Return metrics
+    return {
+        "train_mae": train_mae,
+        "train_mse": train_mse,
+        "train_rmse": train_rmse,
+        "train_r2": train_r2,
+        "test_mae": test_mae,
+        "test_mse": test_mse,
+        "test_rmse": test_rmse,
+        "test_r2": test_r2
+    }
