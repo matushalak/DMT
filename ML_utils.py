@@ -5,14 +5,13 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from datetime import datetime
-
 def normalize_data_and_split(
     df: pd.DataFrame,
     features: List[str],
     target_col: str,
     id_col: str,
     timestamp_col: Optional[str] = None,  # Timestamp column
-    date_col: Optional[str] = None,     # New parameter for date column
+    date_col: Optional[str] = None,     # Explicitly use date column
     per_participant_normalization: bool = False,
     scaler_type: str = "StandardScaler",
     test_size: float = 0.2,
@@ -24,7 +23,7 @@ def normalize_data_and_split(
     Splits the dataframe into training, validation, and test sets and normalizes only the features.
     The scaler(s) are fit on the training set and then applied to the validation and test sets.
     Preserves metadata needed for timeseries plotting.
-    Ensures all measurements from the same day stay in the same split to prevent data leakage.
+    IMPORTANT: Ensures all measurements from the same date stay in the same split to prevent data leakage.
 
     Args:
         df: pandas DataFrame containing all the data.
@@ -32,8 +31,8 @@ def normalize_data_and_split(
         target_col: Column name for the target variable.
         id_col: Column name used to uniquely identify participants (will not be normalized).
         timestamp_col: Optional column name for timestamps (will be preserved for plotting).
-        date_col: Optional column name containing date information. If None but timestamp_col exists,
-                 will extract date from timestamp_col. Needed to group measurements by day.
+        date_col: Column name containing date information. Required to ensure data from the same
+                 date stays together to prevent data leakage.
         per_participant_normalization: If True, performs normalization separately for each participant.
         scaler_type: Type of scaler to use ("StandardScaler" or "MinMaxScaler").
         test_size: Fraction of the whole data to hold out for testing.
@@ -51,14 +50,6 @@ def normalize_data_and_split(
           - scalers: Dictionary containing the scaler(s) used.
           - metadata: Dictionary containing information for reconstruction and plotting.
     """
-    # sort_cols = [id_col, date_col]
-    # if "time_of_day_nonencoded" in df.columns:
-    #     sort_cols.append("time_of_day_nonencoded")
-
-    # df.sort_values(by=sort_cols, inplace=True)
-
-    
-    
     # Initialize scalers dict and metadata dict
     scalers = {}
     metadata = {
@@ -95,55 +86,52 @@ def normalize_data_and_split(
                 df_with_index['_date'] = df_with_index[timestamp_col].dt.date
             date_col = '_date'
         except:
-            print("Warning: Could not extract date from timestamp. Falling back to random split.")
-            date_col = None
+            raise ValueError("Could not extract date from timestamp. Please provide a valid date_col to prevent data leakage.")
+    
+    if date_col is None:
+        raise ValueError("date_col must be provided to prevent data leakage across dates.")
     
     # Separate features (X) and target (y)
     X = df_with_index[features + ['_original_index']].copy()
-    if date_col:
-        X[date_col] = df_with_index[date_col]
+    X[date_col] = df_with_index[date_col]
     y = df_with_index[target_col]
     
     # Columns to normalize (exclude id_col and _original_index and date_col)
     feature_cols = [col for col in features if col != id_col and col != date_col]
 
-    # Group by date if date column exists to prevent data leakage
-    if date_col:
-        # Get unique dates
-        unique_dates = df_with_index[date_col].unique()
-        # Create a mapping of dates to indices
-        date_to_indices = {date: df_with_index[df_with_index[date_col] == date].index.tolist() 
-                          for date in unique_dates}
-        
-        # Split the dates into train, validation, and test sets
-        dates_train_val, dates_test = train_test_split(
-            unique_dates, test_size=test_size, random_state=random_state
-        )
-        dates_train, dates_val = train_test_split(
-            dates_train_val, test_size=val_size, random_state=random_state
-        )
-        
-        # Get indices for each split
-        train_indices = [idx for date in dates_train for idx in date_to_indices[date]]
-        val_indices = [idx for date in dates_val for idx in date_to_indices[date]]
-        test_indices = [idx for date in dates_test for idx in date_to_indices[date]]
-        
-        # Split the data according to the indices
-        X_train = X.loc[train_indices].copy()
-        X_val = X.loc[val_indices].copy()
-        X_test = X.loc[test_indices].copy()
-        
-        y_train = y.loc[train_indices].copy()
-        y_val = y.loc[val_indices].copy()
-        y_test = y.loc[test_indices].copy()
-    else:
-        # Fall back to random split if no date information
-        X_temp, X_test, y_temp, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_temp, y_temp, test_size=val_size, random_state=random_state
-        )
+    # Group by date to prevent data leakage
+    # Get unique dates
+    unique_dates = df_with_index[date_col].unique()
+    
+    # Create a mapping of dates to indices
+    date_to_indices = {date: df_with_index[df_with_index[date_col] == date].index.tolist() 
+                      for date in unique_dates}
+    
+    print(f"Found {len(unique_dates)} unique dates")
+    
+    # Split the dates into train, validation, and test sets
+    dates_train_val, dates_test = train_test_split(
+        unique_dates, test_size=test_size, random_state=random_state
+    )
+    dates_train, dates_val = train_test_split(
+        dates_train_val, test_size=val_size/(1-test_size), random_state=random_state
+    )
+    
+    print(f"Train dates: {len(dates_train)}, Validation dates: {len(dates_val)}, Test dates: {len(dates_test)}")
+    
+    # Get indices for each split
+    train_indices = [idx for date in dates_train for idx in date_to_indices[date]]
+    val_indices = [idx for date in dates_val for idx in date_to_indices[date]]
+    test_indices = [idx for date in dates_test for idx in date_to_indices[date]]
+    
+    # Split the data according to the indices
+    X_train = X.loc[train_indices].copy()
+    X_val = X.loc[val_indices].copy()
+    X_test = X.loc[test_indices].copy()
+    
+    y_train = y.loc[train_indices].copy()
+    y_val = y.loc[val_indices].copy()
+    y_test = y.loc[test_indices].copy()
     
     # Store indices for each split in metadata for reconstruction
     metadata['train_indices'] = X_train['_original_index'].values
@@ -194,10 +182,15 @@ def normalize_data_and_split(
     metadata['X_val_indices'] = X_val['_original_index'].copy()
     metadata['X_test_indices'] = X_test['_original_index'].copy()
     
+    # Store date to split mapping for verification
+    metadata['dates_train'] = dates_train
+    metadata['dates_val'] = dates_val
+    metadata['dates_test'] = dates_test
+    
     # Drop the non-feature columns from the feature sets before returning
-    columns_to_drop = [id_col, '_original_index']
-    if date_col:
-        columns_to_drop.append(date_col)
+    columns_to_drop = ['_original_index', date_col]
+    if id_col in X_train.columns:
+        columns_to_drop.append(id_col)
     
     X_train.drop(columns=columns_to_drop, inplace=True, errors='ignore')
     X_val.drop(columns=columns_to_drop, inplace=True, errors='ignore')  
@@ -207,8 +200,9 @@ def normalize_data_and_split(
     print(f"Train set size: {len(X_train)}")
     print(f"Validation set size: {len(X_val)}")
     print(f"Test set size: {len(X_test)}")
-    print("features:", feature_cols)
-    print("target:", target_col)
+    print("Features:", feature_cols)
+    print("Target:", target_col)
+    print(f"Data from {len(dates_train)} dates in train, {len(dates_val)} in validation, and {len(dates_test)} in test")
    
     return X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata
 

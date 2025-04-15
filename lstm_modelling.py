@@ -22,7 +22,7 @@ from ray.tune import CLIReporter
 from ray.tune.schedulers import ASHAScheduler
 
 from lstm_utils import LSTMModel, SimpleRNNModel, GRUModel
-from lstm_utils import predict_and_plot, train_and_evaluate
+from lstm_utils import train_and_evaluate
 from lstm_utils import save_model, load_model, simple_hyperparameter_tuning
 
 
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # Select only the relevant columns
     # df = df[features]
 
-    do_hyperparameter_tuning = False  # Set to True to enable tuning
+    do_hyperparameter_tuning = True  # Set to True to enable tuning
     
     
     # Default hyperparameters
@@ -71,8 +71,8 @@ if __name__ == "__main__":
         "dropout": 0.3,                         # Dropout rate
         
         # Training parameters
-        "learning_rate": 0.001,                 # Learning rate for Adam optimizer
-        "num_epochs": 20,                       # Maximum number of training epochs
+        "learning_rate": 0.003,                 # Learning rate for Adam optimizer
+        "num_epochs": 30,                       # Maximum number of training epochs
         "clip_gradients": False,                 # Whether to use gradient clipping
         "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
         

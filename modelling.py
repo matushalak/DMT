@@ -28,7 +28,7 @@ from ML_utils import normalize_data_and_split, plot_predictions
 tune_hyperparameters = False  # set to False to disable tuning
 
 # dataset and label details
-dataset_name = "df_ready_date"
+dataset_name = "df_ready_both"
 label = ''
 df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 # print(df.head())
