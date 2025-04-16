@@ -32,6 +32,7 @@ dataset_name = "df_ready_both"
 label = ''
 df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 # print(df.head())
+print("df columns", df.columns)
 
 
 
@@ -59,9 +60,9 @@ print(correlation_with_CATtarget)
 # combine all app.Categorical features into one
 df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
 # Drop individual app.Categorical features
-df.drop(columns=df.columns[df.columns.str.contains('appCat')], inplace=True)
+df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
 
-        
+
 
 # Remove features that should not be used in the model
 features = df.columns.to_list()
@@ -73,6 +74,10 @@ features.remove("next_date")
 
 if "time_of_day_non_encoded" in features:
     features.remove("time_of_day_non_encoded")
+
+# features = ["id_num", "mood_mean_daily"]  # for baseline model
+
+# select 15 most correlated features in absolute value
 
 print("features", features)
 
@@ -87,7 +92,7 @@ X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata = normalize_da
     timestamp_col='date',  # Add this parameter for timeseries plotting,
     per_participant_normalization=True,
     scaler_type="StandardScaler",
-    test_size=0.05,
+    test_size=0.1,
     val_size=0.1,
     random_state=42
 )
@@ -394,12 +399,12 @@ for name, model in models.items():
     
     # Plot validation set predictions
     plot_predictions(
-        y_val, 
-        y_pred_val, 
+        y_test, 
+        y_pred_test, 
         metadata, 
-        dataset='val', 
-        title=f'{name} Validation Predictions (All Participants)',
-        save_path=f"{save_path}_val_combined",
+        dataset='test', 
+        title=f'{name} Test Predictions (All Participants)',
+        save_path=f"{save_path}_test_combined",
         show_plot=False
     )
 

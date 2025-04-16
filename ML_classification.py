@@ -25,7 +25,7 @@ from ML_utils import normalize_data_and_split, plot_predictions
 tune_hyperparameters = False  # set to False to disable tuning
 
 # dataset and label details
-dataset_name = "df_ready_both"
+dataset_name = "df_ready_date"
 label = ''
 df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 # print(df.head())
@@ -59,6 +59,8 @@ features.remove('categorical_target')  # Make sure this matches your actual targ
 features.remove('date')  # Remove date if present
 features.remove("next_date")
 
+# features = ["id_num", "mood_mean_daily"] # for baseline model
+
 if "time_of_day_non_encoded" in features:
     features.remove("time_of_day_non_encoded")
 
@@ -74,8 +76,8 @@ X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata = normalize_da
     timestamp_col='date',  # Add this parameter for timeseries plotting,
     per_participant_normalization=True,
     scaler_type="StandardScaler",
-    test_size=0.05,
-    val_size=0.1,
+    test_size=0.1,
+    val_size=0.000000000001,
     random_state=42
 )
 # Store feature names before fitting models

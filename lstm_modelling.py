@@ -37,54 +37,106 @@ else:
 
 if __name__ == "__main__":
     # Load the dataset
-    dataset_name = "df_ready_date"
+    dataset_name = "df_ready_both"
     dropped_vars = ["appCat"]
     imputation = "mean_mode"
     df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
+
+    df.drop(columns=["categorical_target"], inplace=True)
 
 
 
     # combine all app.Categorical features into one
     df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
     # Drop individual app.Categorical features
-    df.drop(columns=df.columns[df.columns.str.contains('appCat')], inplace=True)
+    df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
     
     # select features
-    features = ["id_num", "date", "target",'mood_last_daily', 'circumplex.QUADRANT_daily_2', 'weekday_1', 'weekday_4', 'weekday_3', 'month_5', 'mva7_circumplex.valence_std.slide_daily', 'change_screen_sum_daily', 'circumplex.valence_std.slide_daily', 'activity_max_daily', 'circumplex.QUADRANT_daily_3', 'mood_std.slide_daily', 'circumplex.valence_mean_daily', 'mva7_change_screen_sum_daily', 'mood_first_daily', 'circumplex.valence_last_daily', 'mva7_mood_mean_daily']
+    # features = ["id_num", "date", "target",'mood_last_daily', 'circumplex.QUADRANT_daily_2', 'weekday_1', 'weekday_4', 'weekday_3', 'month_5', 'mva7_circumplex.valence_std.slide_daily', 'change_screen_sum_daily', 'circumplex.valence_std.slide_daily', 'activity_max_daily', 'circumplex.QUADRANT_daily_3', 'mood_std.slide_daily', 'circumplex.valence_mean_daily', 'mva7_change_screen_sum_daily', 'mood_first_daily', 'circumplex.valence_last_daily', 'mva7_mood_mean_daily']
+
+    most_correlated_selection = True
+    if most_correlated_selection:
+        # select 15 most correlated features absolutely (but only numerical features)
+        numerical_features = df.select_dtypes(include=[np.number]).columns.tolist()
+        # Calculate the correlation matrix
+        corr = df[numerical_features].corr()        
+        corr_target = corr["target"].abs().sort_values(ascending=False)
+        # Select the top 15 features
+        top_15_features = corr_target.index[:15].tolist()
+        print(f"Top 15 features: {top_15_features}")
+
+        # add id_num, "target", "date" to the top 15 features
+        top_15_features = ["id_num", "date", "target"] + top_15_features
+        top_15_features = list(dict.fromkeys(top_15_features)) # remove duplicates
+        # add time_of_day if it exists in df
+        if "time_of_day" in df.columns:
+            top_15_features.append("time_of_day")
+
+
+        # df = df[top_15_features]
+        features = top_15_features
+
 
     # Select only the relevant columns
     # df = df[features]
 
-    do_hyperparameter_tuning = True  # Set to True to enable tuning
+    do_hyperparameter_tuning = False  # Set to True to enable tuning
     
     
     # Default hyperparameters
-    config = {
-        # Data parameters
-        "seq_length": 7,                        # Number of days to use for prediction
-        "batch_size": 32,                       # Batch size for training
-        
-        # Model architecture
-        "model_type": "SimpleRNN",                   # Model type (LSTM, GRU, or SimpleRNN)
-        "hidden_dim": 16,                       # Size of LSTM hidden layer
-        "num_layers": 2,                        # Number of LSTM layers
-        "dropout": 0.3,                         # Dropout rate
-        
-        # Training parameters
-        "learning_rate": 0.003,                 # Learning rate for Adam optimizer
-        "num_epochs": 30,                       # Maximum number of training epochs
-        "clip_gradients": False,                 # Whether to use gradient clipping
-        "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
-        
-        # Data processing
-        "transform_features": True,             # Whether to normalize features
-        "transform_target": False,               # Whether to normalize target
-        "scaler_type": "MinMaxScaler",        # Scaler type (StandardScaler or MinMaxScaler)
-        "shuffle_data": True,                   # Whether to shuffle training data
-        
-        # Additional options for padding support
-        "per_participant_normalization": True  # Whether to normalize per participant
-    }
+    if dataset_name == "df:ready_date":
+        config = {
+            # Data parameters
+            "seq_length": 5,                        # Number of days to use for prediction
+            "batch_size": 32,                       # Batch size for training
+            
+            # Model architecture
+            "model_type": "GRU",                   # Model type (LSTM, GRU, or SimpleRNN)
+            "hidden_dim": 16,                       # Size of LSTM hidden layer
+            "num_layers": 1,                        # Number of LSTM layers
+            "dropout": 0.2,                         # Dropout rate
+            
+            # Training parameters
+            "learning_rate": 0.001,                 # Learning rate for Adam optimizer
+            "num_epochs": 30,                       # Maximum number of training epochs
+            "clip_gradients": False,                 # Whether to use gradient clipping
+            "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
+            
+            # Data processing
+            "transform_features": True,             # Whether to normalize features
+            "transform_target": True,               # Whether to normalize target
+            "scaler_type": "MinMaxScaler",        # Scaler type (StandardScaler or MinMaxScaler)
+            "shuffle_data": True,                   # Whether to shuffle training data
+            
+            # Additional options for padding support
+            "per_participant_normalization": True  # Whether to normalize per participant
+        }
+    elif dataset_name == "df_ready_both":
+        config = {
+            # Data parameters
+            "seq_length": 21,                        # Number of days to use for prediction
+            "batch_size": 32,                       # Batch size for training
+            
+            # Model architecture
+            "model_type": "GRU",                   # Model type (LSTM, GRU, or SimpleRNN)
+            "hidden_dim": 16,                       # Size of LSTM hidden layer
+            "num_layers": 1,                        # Number of LSTM layers
+            "dropout": 0.3,                         # Dropout rate
+            
+            # Training parameters
+            "learning_rate": 0.001,                 # Learning rate for Adam optimizer
+            "num_epochs": 3,                       # Maximum number of training epochs
+            "clip_gradients": False,                 # Whether to use gradient clipping
+            "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
+            
+            # Data processing
+            "transform_features": True,             # Whether to normalize features
+            "transform_target": True,               # Whether to normalize target
+            "scaler_type": "MinMaxScaler",        # Scaler type (StandardScaler or MinMaxScaler)
+            "shuffle_data": True,                   # Whether to shuffle training data
+            
+            "per_participant_normalization": True  # Whether to normalize per participant
+        }
     
     # Create directories for outputs
     os.makedirs("tables/results", exist_ok=True)
@@ -97,10 +149,10 @@ if __name__ == "__main__":
 
         param_grid = {
             # Sequence parameters
-            "seq_length": [5, 7],                 # Test shorter and longer sequence windows
+            "seq_length": [15, 21, 27],                 # Test shorter and longer sequence windows
             
             # Model architecture parameters
-            "model_type": ["GRU", "SimpleRNN"],            # Focus on the two stronger model types
+            "model_type": ["GRU", "SimpleRNN", "LSTM"],            # Focus on the two stronger model types
             "hidden_dim": [16, 32],             # Test different capacities
             "num_layers": [1, 2],                     # More than 2 layers rarely helps for this task
             "dropout": [0.2, 0.3],               # Test different regularization strengths

@@ -824,7 +824,7 @@ def train_and_evaluate(
     scaler_type = config.get("scaler_type", "MinMaxScaler")
     
     shuffle_data = config.get("shuffle_data", True)
-    train_ratio = config.get("train_ratio", 0.7)
+    train_ratio = config.get("train_ratio", 0.8)
     val_ratio = config.get("val_ratio", 0.15)
     split_within_participants = config.get("split_within_participants", True)
     
@@ -884,10 +884,6 @@ def train_and_evaluate(
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # Load checkpoint if available
-    if checkpoint_dir and os.path.exists(os.path.join(checkpoint_dir, "model.pt")):
-        model.load_state_dict(torch.load(os.path.join(checkpoint_dir, "model.pt")))
-        print(f"Loaded model from {checkpoint_dir}")
     
     # Storage for losses
     train_losses = []
@@ -967,10 +963,6 @@ def train_and_evaluate(
             best_val_loss = avg_val_loss
             patience_counter = 0
             best_model_state = model.state_dict().copy()
-            
-            # Save best model checkpoint
-            os.makedirs('checkpoints', exist_ok=True)
-            torch.save(model.state_dict(), f'checkpoints/model_epoch_{epoch+1}.pt')
         else:
             patience_counter += 1
         
@@ -1058,17 +1050,24 @@ def train_and_evaluate(
             'Actual': actuals,
             'Predicted': predictions,
         })
+
+        print("df_results shape:", df_results.shape)
+        print("df_results head:\n", df_results.head())
         
+
+
+
+      
         # Save plot if requested
         if save_fig:
-            os.makedirs('figures', exist_ok=True)
+            os.makedirs('figures_regression', exist_ok=True)
             plt.figure(figsize=(10, 6))
             plt.scatter(actuals, predictions, alpha=0.5)
             plt.plot([min(actuals), max(actuals)], [min(actuals), max(actuals)], 'r--')
             plt.xlabel(f'Actual {target_col}')
             plt.ylabel(f'Predicted {target_col}')
             plt.title(f'{dataset_name} Set: Actual vs Predicted (R² = {r2:.4f})')
-            plt.savefig(f'figures/{dataset_name.lower()}_predictions.png')
+            plt.savefig(f'figures_regression/{dataset_name.lower()}_predictions.png')
             plt.close()
         
         # Return metrics, ensuring scalar values for numerical metrics
@@ -1086,7 +1085,8 @@ def train_and_evaluate(
     train_metrics = evaluate_dataset(model, train_loader, "Train")
     val_metrics = evaluate_dataset(model, val_loader, "Val")
     test_metrics = evaluate_dataset(model, test_loader, "Test")
-    
+
+    print(f"Predictions saved to predictions/predictions_{dataset_name}.npz")
     # Combine all metrics, ensuring they are scalar values
     metrics = {}
     for k, v in train_metrics.items():
@@ -1126,14 +1126,14 @@ def train_and_evaluate(
         plt.plot(range(1, len(val_losses)+1), val_losses, label='Val Loss', marker='o')
         
         # Make sure test loss is a scalar
-        test_loss = float(metrics['loss_test'])
-        plt.axhline(y=test_loss, color='r', linestyle='-', label='Test Loss')
+        # test_loss = float(metrics['loss_test'])
+        # plt.axhline(y=test_loss, color='r', linestyle='-', label='Test Loss')
         
         plt.xlabel("Epoch")
         plt.ylabel("Loss (MSE)")
         plt.title("Training, Validation, and Test Loss")
         plt.legend()
-        plt.savefig("figures/loss_curves.png")
+        plt.savefig("figures_regression/loss_curves.png")
         plt.close()
     
     # Collect hyperparameters
@@ -1255,12 +1255,12 @@ def train_and_evaluate(
         )
 
         # Create a comparison plot of metrics across splits
-        metric_comparison = compare_split_metrics(
-            train_metrics=train_metrics,
-            val_metrics=val_metrics,
-            test_metrics=test_metrics,
-            target_col='target'
-        )
+        # metric_comparison = compare_split_metrics(
+        #     train_metrics=train_metrics,
+        #     val_metrics=val_metrics,
+        #     test_metrics=test_metrics,
+        #     target_col='target'
+        # )
     
     
     return metrics
@@ -1292,37 +1292,38 @@ def simple_hyperparameter_tuning(
     print("Starting simple hyperparameter tuning...")
     
     # Set default config if not provided
-    if default_config is None:
-        default_config = {
-            "model_type": "LSTM",
-            "hidden_dim": 64,
-            "num_layers": 1,
-            "dropout": 0.2,
-            "learning_rate": 0.001,
-            "batch_size": 32,
-            "num_epochs": 30,
-            "seq_length": 7,
-            "scaler_type": "MinMaxScaler",
-            "transform_target": True,
-            "per_participant_normalization": True,
-            "split_within_participants": True,
-            "shuffle_data": True,
-            "train_ratio": 0.7,
-            "val_ratio": 0.15,
-            "clip_gradients": True,
-            "max_grad_norm": 1.0,
-            "patience": 5,
-            "target_col": "target"
-        }
+    # if default_config is None:
+    #     print("Using default configuration for hyperparameter tuning.")
+        # default_config = {
+        #     "model_type": "LSTM",
+        #     "hidden_dim": 64,
+        #     "num_layers": 1,
+        #     "dropout": 0.2,
+        #     "learning_rate": 0.001,
+        #     "batch_size": 32,
+        #     "num_epochs": 30,
+        #     "seq_length": 7,
+        #     "scaler_type": "MinMaxScaler",
+        #     "transform_target": True,
+        #     "per_participant_normalization": True,
+        #     "split_within_participants": True,
+        #     "shuffle_data": True,
+        #     "train_ratio": 0.7,
+        #     "val_ratio": 0.15,
+        #     "clip_gradients": True,
+        #     "max_grad_norm": 1.0,
+        #     "patience": 5,
+        #     "target_col": "target"
+        # }
     
     # Set parameter grid if not provided
-    if param_grid is None:
-        param_grid = {
-            "model_type": ["LSTM", "GRU", "SimpleRNN"],
-            "hidden_dim": [32, 64, 128],
-            "seq_length": [5, 7, 10],
-            "learning_rate": [0.001, 0.0005]
-        }
+    # if param_grid is None:
+    #     param_grid = {
+    #         "model_type": ["LSTM", "GRU", "SimpleRNN"],
+    #         "hidden_dim": [32, 64, 128],
+    #         "seq_length": [5, 7, 10],
+    #         "learning_rate": [0.001, 0.0005]
+    #     }
     
     # Create directory to store results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1330,9 +1331,7 @@ def simple_hyperparameter_tuning(
     os.makedirs(results_dir, exist_ok=True)
     
     # Focus on key hyperparameters for the grid search
-    key_params = {k: v for k, v in param_grid.items() if k in [
-        "model_type", "hidden_dim", "seq_length", "learning_rate"
-    ]}
+    key_params = {k: v for k, v in param_grid.items()}
     
     # Create combinations of parameters
     key_param_names = list(key_params.keys())
@@ -1819,7 +1818,7 @@ def plot_participant_timeseries(model,
     
     # Setup base directory for saving plots
     if save_path is None:
-        base_dir = f"figures/participants/{split_name.lower()}"
+        base_dir = f"figures_regression/participants/{split_name.lower()}"
     else:
         base_dir = os.path.join(os.path.dirname(save_path), f"participants/{split_name.lower()}")
     
@@ -1918,6 +1917,9 @@ def plot_participant_timeseries(model,
                     fontsize=14)
         
         # Adjust layout
+
+        plt.ylim((5,10))
+        
         plt.tight_layout()
         plt.subplots_adjust(top=0.9)  # Make room for suptitle
         
@@ -2186,7 +2188,7 @@ def predict_and_plot_simple(model, train_loader, test_loader, target_scaler=None
     test_mae, test_mse, test_rmse, test_r2 = print_stats(y_true_test, y_pred_test, "Test")
     
     # Create plot directory if it doesn't exist
-    os.makedirs("figures/simple_plots", exist_ok=True)
+    os.makedirs("figures_regression/simple_plots", exist_ok=True)
     
     # Plot predictions vs. ground truth
     fig, axes = plt.subplots(2, 1, figsize=(10, 8))
@@ -2211,7 +2213,7 @@ def predict_and_plot_simple(model, train_loader, test_loader, target_scaler=None
     
     # Adjust layout and save
     plt.tight_layout()
-    plt.savefig("figures/simple_plots/predictions_comparison.png", dpi=300, bbox_inches="tight")
+    plt.savefig("figures_regression/simple_plots/predictions_comparison.png", dpi=300, bbox_inches="tight")
     
     # Create scatter plots
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -2238,7 +2240,7 @@ def predict_and_plot_simple(model, train_loader, test_loader, target_scaler=None
     
     # Save scatter plot
     plt.tight_layout()
-    plt.savefig("figures/simple_plots/scatter_comparison.png", dpi=300, bbox_inches="tight")
+    plt.savefig("figures_regression/simple_plots/scatter_comparison.png", dpi=300, bbox_inches="tight")
     
     # Return metrics
     return {
