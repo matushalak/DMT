@@ -784,6 +784,8 @@ def load_model(model_path, device):
 
 
 
+
+
 def train_and_evaluate(
     config, 
     df, 
@@ -1054,6 +1056,7 @@ def train_and_evaluate(
         print("df_results shape:", df_results.shape)
         print("df_results head:\n", df_results.head())
         
+  
 
 
 
@@ -1085,6 +1088,11 @@ def train_and_evaluate(
     train_metrics = evaluate_dataset(model, train_loader, "Train")
     val_metrics = evaluate_dataset(model, val_loader, "Val")
     test_metrics = evaluate_dataset(model, test_loader, "Test")
+
+          # Example usage after evaluation:
+    save_predictions_to_csv(model, train_loader, "Train", target_scaler=scaler_target)
+    save_predictions_to_csv(model, val_loader, "Val", target_scaler=scaler_target)
+    save_predictions_to_csv(model, test_loader, "Test", target_scaler=scaler_target)
 
     print(f"Predictions saved to predictions/predictions_{dataset_name}.npz")
     # Combine all metrics, ensuring they are scalar values
@@ -1219,40 +1227,40 @@ def train_and_evaluate(
 
         results_df.to_csv(results_path, mode='a', header=False, index=True)
 
-    predict_and_plot_simple(
-        model=model,
-        train_loader=train_loader,
-        test_loader=test_loader,
-        target_scaler=scaler_target)
+    # predict_and_plot_simple(
+    #     model=model,
+    #     train_loader=train_loader,
+    #     test_loader=test_loader,
+    #     target_scaler=scaler_target)
 
-    if save_fig:
-        # Generate plots for each data split
-        train_results, train_metrics = plot_participant_timeseries(
-            model=model,
-            data_loader=train_loader,
-            dataset=train_dataset,
-            target_col='target',
-            target_scalers=trained_scalers,
-            split_name="Train"
-        )
+    # if save_fig:
+    #     # Generate plots for each data split
+    #     train_results, train_metrics = plot_participant_timeseries(
+    #         model=model,
+    #         data_loader=train_loader,
+    #         dataset=train_dataset,
+    #         target_col='target',
+    #         target_scalers=trained_scalers,
+    #         split_name="Train"
+    #     )
 
-        val_results, val_metrics = plot_participant_timeseries(
-            model=model,
-            data_loader=val_loader,
-            dataset=val_dataset,
-            target_col='target',
-            target_scalers=trained_scalers,
-            split_name="Validation"
-        )
+    #     val_results, val_metrics = plot_participant_timeseries(
+    #         model=model,
+    #         data_loader=val_loader,
+    #         dataset=val_dataset,
+    #         target_col='target',
+    #         target_scalers=trained_scalers,
+    #         split_name="Validation"
+    #     )
 
-        test_results, test_metrics = plot_participant_timeseries(
-            model=model,
-            data_loader=test_loader,
-            dataset=test_dataset,
-            target_col='target',
-            target_scalers=trained_scalers,
-            split_name="Test"
-        )
+    #     test_results, test_metrics = plot_participant_timeseries(
+    #         model=model,
+    #         data_loader=test_loader,
+    #         dataset=test_dataset,
+    #         target_col='target',
+    #         target_scalers=trained_scalers,
+    #         split_name="Test"
+        # )
 
         # Create a comparison plot of metrics across splits
         # metric_comparison = compare_split_metrics(
@@ -2253,3 +2261,239 @@ def predict_and_plot_simple(model, train_loader, test_loader, target_scaler=None
         "test_rmse": test_rmse,
         "test_r2": test_r2
     }
+import os
+import math
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import numpy as np
+
+
+def save_predictions_to_csv(model, data_loader, split_name, target_scaler=None):
+    """
+    Generates predictions using the model on the given data_loader and saves actual
+    and predicted values along with participant IDs into a CSV file. Inverse transforms
+    the predictions and targets on a per-participant basis using the provided 
+    target_scaler dictionary.
+    
+    Args:
+        model: Trained PyTorch model.
+        data_loader: DataLoader for the dataset split.
+        split_name: Name of the dataset split (e.g., 'Train', 'Val', or 'Test').
+        target_scaler: A dictionary mapping participant id to its corresponding scaler.
+                       Example: {participant_id1: scaler1, participant_id2: scaler2, ...}
+    """
+    import torch
+    import numpy as np
+    import pandas as pd
+    import os
+
+    device = torch.device("cpu")
+    model.to(device)
+    model.eval()
+
+    all_predictions = []
+    all_actuals = []
+    all_participant_ids = []
+
+    with torch.no_grad():
+        for batch in data_loader:
+            # Move inputs to the specified device
+            x_features, x_id, y, mask = [b.to(device) for b in batch]
+            outputs = model(x_features, x_id, mask)
+            
+            # Ensure that predictions and actuals are at least 1D arrays.
+            preds = np.atleast_1d(outputs.squeeze().cpu().numpy())
+            actuals = np.atleast_1d(y.cpu().numpy())
+            # Extract participant ids; use x_id from the current batch
+            participant_ids = x_id[:, 0].cpu().numpy()
+            
+            all_predictions.append(preds)
+            all_actuals.append(actuals)
+            all_participant_ids.append(participant_ids)
+
+    # Concatenate data across batches
+    all_predictions = np.concatenate(all_predictions)
+    all_actuals = np.concatenate(all_actuals)
+    all_participant_ids = np.concatenate(all_participant_ids)
+
+    # Apply inverse transformation for each participant using the provided scalers.
+    if target_scaler is not None:
+        for participant, scaler in target_scaler.items():
+            # Use the concatenated array of participant IDs for masking.
+            mask = (all_participant_ids == participant)
+            # Inverse transform predictions for the current participant.
+            temp_pred = scaler.inverse_transform(all_predictions[mask].reshape(-1, 1))
+            all_predictions[mask] = temp_pred.ravel()
+            # Inverse transform actuals for the current participant.
+            temp_tgt = scaler.inverse_transform(all_actuals[mask].reshape(-1, 1))
+            all_actuals[mask] = temp_tgt.ravel()
+
+    # Create the DataFrame with participant id, actual and predicted values.
+    df = pd.DataFrame({
+        'participant_id': all_participant_ids,
+        'actual': all_actuals,
+        'predicted': all_predictions
+    })
+
+    os.makedirs("predictions1", exist_ok=True)
+    file_path = os.path.join("predictions1", f"{split_name.lower()}_predictions.csv")
+    df.to_csv(file_path, index=False)
+    print(f"Saved {split_name} predictions to {file_path}")
+
+
+def load_and_prepare_csv(csv_path):
+    """
+    Load a CSV file and ensure a datetime column is present.
+    
+    If the CSV does not have a 'date' column, then a dummy date is created for
+    each data point per participant by using its order in the dataset.
+    
+    Args:
+        csv_path (str): Path to the CSV file.
+    
+    Returns:
+        pd.DataFrame: DataFrame with at least the following columns:
+            'participant_id', 'actual', 'predicted', and 'date' (as datetime).
+    """
+    df = pd.read_csv(csv_path)
+    # If there's a 'date' column, try parsing it as datetime.
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    else:
+        # Create a dummy date. For each participant, use a base date and add a timedelta.
+        base_date = pd.to_datetime("2023-01-01")
+        # Create a new 'date' column using cumulative count per participant.
+        df['date'] = df.groupby('participant_id').cumcount()
+        df['date'] = df['date'].apply(lambda x: base_date + pd.Timedelta(days=x))
+    
+    # Sort by participant_id and date so that the time series is in order.
+    df.sort_values(['participant_id', 'date'], inplace=True)
+    return df
+
+def plot_timeseries_subplots_date(df, split_name):
+    """
+    Create a grid of time series subplots for all participants showing the actual vs predicted values.
+    Instead of using date information on the x-axis, each plot shows time points.
+    The y-axis limits are fixed from 5 to 10.
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing the predictions. Must include columns: 
+                           'participant_id', 'actual', 'predicted'.
+        split_name (str): Name of the dataset split (e.g., "Train", "Val", "Test").
+    """
+    # Get unique participant IDs
+    participants = df['participant_id'].unique()
+    n = len(participants)
+    
+    # Determine grid size (using a square-ish layout)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    
+    # Create subplots
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4), squeeze=False)
+    
+    # Flatten the axes for easy iteration
+    axes_flat = axes.flatten()
+    
+    # Loop through each participant and plot time series using time points on x-axis.
+    for i, pid in enumerate(participants):
+        ax = axes_flat[i]
+        df_pid = df[df['participant_id'] == pid]
+        time_points = np.arange(len(df_pid))  # Use sequential time points instead of dates
+        
+        ax.plot(time_points, df_pid['actual'], marker='o', label='Actual')
+        ax.plot(time_points, df_pid['predicted'], marker='x', label='Predicted')
+        ax.set_title(f"Participant {pid}")
+        ax.set_xlabel("Time Point")
+        ax.set_ylabel("Target Value")
+        ax.legend(loc='best')
+        ax.grid(True, linestyle="--", alpha=0.7)
+        
+        # Set x-axis ticks based on the number of time points
+        ax.set_xticks(time_points)
+        
+        # Set constant y-axis limits from 5 to 10
+        ax.set_ylim(5, 10)
+    
+    # Remove any extra subplots if participants < rows * cols
+    for j in range(i + 1, rows * cols):
+        fig.delaxes(axes_flat[j])
+    
+    fig.suptitle(f"{split_name.capitalize()} Dataset: Actual vs Predicted Time Series", fontsize=16)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    
+    # Save the figure
+    output_folder = f"figures_{split_name.lower()}"
+    os.makedirs(output_folder, exist_ok=True)
+    file_path = os.path.join(output_folder, f"{split_name.lower()}_all_participants.png")
+    plt.savefig(file_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved combined time series plot to {file_path}")
+
+def plot_timeseries_subplots_both(df, split_name):
+    """
+    Create a grid of time series subplots for all participants showing the actual vs predicted values.
+    Instead of using date information on the x-axis, each plot shows time points.
+    The y-axis limits are fixed from 5 to 10.
+    
+    Debug prints are added to help diagnose issues when multiple predictions per day are present.
+    
+    Args:
+        df (pd.DataFrame): DataFrame containing the predictions. Must include columns: 
+                           'participant_id', 'actual', 'predicted'.
+        split_name (str): Name of the dataset split (e.g., "Train", "Val", "Test").
+    """
+    # Get unique participant IDs
+    participants = df['participant_id'].unique()[1]  # use all participants
+    n = len(participants)
+    
+    # Determine grid size (using a square-ish layout)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    
+    print(f"Found {n} participants: {participants}")
+    
+    # Create subplots
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4), squeeze=False)
+    axes_flat = axes.flatten()
+    
+    for i, pid in enumerate(participants):
+        ax = axes_flat[i]
+        df_pid = df[df['participant_id'] == pid]
+        time_points = np.arange(len(df_pid))  # sequential time points for each row
+        
+        # Debug prints
+        print(f"Participant {pid}: {len(df_pid)} points")
+        if len(df_pid) > 0:
+            print(f"  actual range: {df_pid['actual'].min()} to {df_pid['actual'].max()}")
+            print(f"  predicted range: {df_pid['predicted'].min()} to {df_pid['predicted'].max()}")
+            print(f"  time_points: min={time_points.min()} max={time_points.max()}")
+        
+        ax.plot(time_points, df_pid['actual'], marker='o', label='Actual')
+        ax.plot(time_points, df_pid['predicted'], marker='x', label='Predicted')
+        ax.set_title(f"Participant {pid}")
+        ax.set_xlabel("Time Point")
+        ax.set_ylabel("Target Value")
+        ax.legend(loc='best')
+        ax.grid(True, linestyle="--", alpha=0.7)
+        
+        # If you want to set xticks, you can uncomment the line below
+        # ax.set_xticks(time_points)
+        
+        # FIX: Set constant y-axis limits correctly (lower bound 5, upper bound 10)
+        ax.set_ylim(5, 10)
+    
+    # Remove any extra subplots if there are fewer participants than subplots.
+    for j in range(i + 1, rows * cols):
+        fig.delaxes(axes_flat[j])
+    
+    fig.suptitle(f"{split_name.capitalize()} Dataset: Actual vs Predicted Time Series", fontsize=16)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    
+    # Save the figure
+    output_folder = f"figures_{split_name.lower()}"
+    os.makedirs(output_folder, exist_ok=True)
+    file_path = os.path.join(output_folder, f"{split_name.lower()}_all_participants.png")
+    plt.savefig(file_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved combined time series plot to {file_path}")

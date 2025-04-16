@@ -23,7 +23,7 @@ from ray.tune.schedulers import ASHAScheduler
 
 from lstm_utils import LSTMModel, SimpleRNNModel, GRUModel
 from lstm_utils import train_and_evaluate
-from lstm_utils import save_model, load_model, simple_hyperparameter_tuning
+from lstm_utils import save_model, load_model, simple_hyperparameter_tuning, save_predictions_to_csv, load_and_prepare_csv, plot_timeseries_subplots_date
 
 
 # --- Mac acceleration ---
@@ -37,7 +37,7 @@ else:
 
 if __name__ == "__main__":
     # Load the dataset
-    dataset_name = "df_ready_both"
+    dataset_name = "df_ready_date"
     dropped_vars = ["appCat"]
     imputation = "mean_mode"
     df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     
     
     # Default hyperparameters
-    if dataset_name == "df:ready_date":
+    if dataset_name == "df_ready_date":
         config = {
             # Data parameters
             "seq_length": 5,                        # Number of days to use for prediction
@@ -92,13 +92,13 @@ if __name__ == "__main__":
             
             # Model architecture
             "model_type": "GRU",                   # Model type (LSTM, GRU, or SimpleRNN)
-            "hidden_dim": 16,                       # Size of LSTM hidden layer
-            "num_layers": 1,                        # Number of LSTM layers
+            "hidden_dim": 32,                       # Size of LSTM hidden layer
+            "num_layers": 2,                        # Number of LSTM layers
             "dropout": 0.2,                         # Dropout rate
             
             # Training parameters
             "learning_rate": 0.001,                 # Learning rate for Adam optimizer
-            "num_epochs": 30,                       # Maximum number of training epochs
+            "num_epochs": 2,                       # Maximum number of training epochs
             "clip_gradients": False,                 # Whether to use gradient clipping
             "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
             
@@ -120,12 +120,12 @@ if __name__ == "__main__":
             # Model architecture
             "model_type": "GRU",                   # Model type (LSTM, GRU, or SimpleRNN)
             "hidden_dim": 16,                       # Size of LSTM hidden layer
-            "num_layers": 1,                        # Number of LSTM layers
+            "num_layers": 2,                        # Number of LSTM layers
             "dropout": 0.3,                         # Dropout rate
             
             # Training parameters
             "learning_rate": 0.001,                 # Learning rate for Adam optimizer
-            "num_epochs": 3,                       # Maximum number of training epochs
+            "num_epochs": 20,                       # Maximum number of training epochs
             "clip_gradients": False,                 # Whether to use gradient clipping
             "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
             
@@ -203,3 +203,21 @@ if __name__ == "__main__":
         if "predictions_" in key or "actuals_" in key:
             continue
         print(f"{key}: {value}")
+
+
+    csv_files = {
+    "Train": "predictions1/train_predictions.csv",
+    "Val": "predictions1/val_predictions.csv",
+    "Test": "predictions1/test_predictions.csv"
+}
+
+    # Process each CSV file and plot the time series.
+    for split_name, csv_path in csv_files.items():
+        if os.path.exists(csv_path):
+            df = load_and_prepare_csv(csv_path)
+            if dataset_name == "df_ready_both":
+                plot_timeseries_subplots_both(df, split_name)
+            else:
+                plot_timeseries_subplots_date(df, split_name)
+        else:
+            print(f"File not found: {csv_path}")
