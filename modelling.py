@@ -28,7 +28,7 @@ from ML_utils import normalize_data_and_split, plot_predictions
 tune_hyperparameters = False  # set to False to disable tuning
 
 # dataset and label details
-dataset_name = "df_ready_both"
+dataset_name = "df_ready_date"
 label = ''
 df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 # print(df.head())
@@ -36,41 +36,31 @@ print("df columns", df.columns)
 
 
 
+# combine all app.Categorical features into one
+df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
+# Drop individual app.Categorical features
+df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
 
 df_numeric = df.select_dtypes(include=[np.number])
 
 # # check correlations between features and target
 correlations = df_numeric.corr()
 correlation_with_target = correlations["target"].sort_values(ascending=False)
-correlation_with_CATtarget = correlations["categorical_target"].sort_values(ascending=False)
+correlation_with_CATtarget = correlations["categorical_target"].abs().sort_values(ascending=False)
 print("Correlation with REGRESSION target:")
 print(correlation_with_target)
 print("Correlation with CLASSIFICATION target:")
 print(correlation_with_CATtarget)
 
-# drop any feature with less than 0.1 correlation with target
-# threshold = 0.0
-# features_to_drop = correlation_with_target[abs(correlation_with_target) < threshold].index.tolist()
-# # features_to_drop.remove("target")  # Remove target from the list
-# print("Features to drop based on correlation with target:")
-# print(features_to_drop)
-# # Drop the features from the dataset
-# df.drop(columns=features_to_drop, inplace=True)
-
-# combine all app.Categorical features into one
-df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
-# Drop individual app.Categorical features
-df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
-
 
 
 # Remove features that should not be used in the model
-features = df.columns.to_list()
-# features.remove('id_num')
+features = correlation_with_target.index.tolist()[:37]
+features.remove('id_num')
 features.remove('target')  # Make sure this matches your actual target column name
 features.remove('categorical_target')  # Make sure this matches your actual target column name
-features.remove('date')  # Remove date if present
-features.remove("next_date")
+# features.remove('date')  # Remove date if present
+# features.remove("next_date")
 
 if "time_of_day_non_encoded" in features:
     features.remove("time_of_day_non_encoded")
@@ -79,7 +69,7 @@ if "time_of_day_non_encoded" in features:
 
 # select 15 most correlated features in absolute value
 
-print("features", features)
+print("features", features, "count", len(features))
 
 
 # Update the function call to include timestamp_col parameter
@@ -93,7 +83,7 @@ X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata = normalize_da
     per_participant_normalization=True,
     scaler_type="StandardScaler",
     test_size=0.1,
-    val_size=0.1,
+    val_size=0.00001,
     random_state=42
 )
 # Store feature names before fitting models
@@ -109,7 +99,7 @@ models = {
     'Random Forest': RandomForestRegressor(), 
     'XGBoost Regressor': XGBRegressor(objective='reg:squarederror', eval_metric='rmse'),
     'Gradient Boosting': GradientBoostingRegressor(),
-    'SVR': SVR()
+    # 'SVR': SVR()
 }
 
 param_grids = {
@@ -179,6 +169,76 @@ param_grids = {
     }
 }
 
+param_grids['Gradient Boosting'] = {
+    # moderate number of trees with early‑stopping can be added via fit_params
+    'n_estimators': [100, 200],
+
+    # slower learning to require more trees to fit residuals
+    'learning_rate': [0.01, 0.03],
+
+    # very shallow trees
+    'max_depth': [1, 2, 3],
+
+    # require more samples to split and to form a leaf
+    'min_samples_split': [10, 20],
+    'min_samples_leaf': [5, 10],
+
+    # only use a fraction of samples and features per tree
+    'subsample': [0.5, 0.7],
+    'max_features': ['sqrt', 0.5]
+}
+
+param_grids['Random Forest'] = {
+    # moderate number of trees but each built very simply
+    'n_estimators': [100, 200],
+    'max_depth': [3, 5],                 # shallow trees
+    'min_samples_split': [20, 50],       # require many samples to split
+    'min_samples_leaf': [10, 20],        # leaves cover many samples
+    'max_features': ['sqrt', 0.3, 0.5],  # only a small subset of features per split
+    'bootstrap': [True],
+    'max_samples': [0.6, 0.8],           # each tree sees 60–80% of data
+    'ccp_alpha': [0.001, 0.01]           # cost‑complexity pruning
+}
+
+param_grids['XGBoost Regressor'] = {
+    # fewer trees (since we’ll use very small learning rates)
+    'n_estimators': [100, 200],
+
+    # exceptionally shallow trees
+    'max_depth': [1, 2],
+
+    # ultra‑slow learning
+    'learning_rate': [0.001, 0.005],
+
+    # heavier row/column subsampling
+    'subsample': [0.3, 0.5],
+    'colsample_bytree': [0.3, 0.5],
+
+    # require large loss reduction for any split
+    'gamma': [0.5, 1.0],
+
+    # ensure each leaf has many observations
+    'min_child_weight': [10, 20],
+
+    # very strong regularization
+    'reg_alpha': [5.0, 10.0],
+    'reg_lambda': [50.0, 100.0],
+
+    # constrain weight updates per leaf
+    'max_delta_step': [1, 2]
+}
+
+param_grids['Gradient Boosting'] = {
+    'n_estimators': [100, 200],
+    'learning_rate': [0.01, 0.05],       # slower learning
+    'max_depth': [2, 3],                 # shallow trees
+    'min_samples_split': [10, 20],       # require more samples to split
+    'min_samples_leaf': [5, 10],         # larger leaves
+    'subsample': [0.6, 0.8],             # row sampling per tree
+    'max_features': [0.5, 'sqrt']        # feature subsetting per split
+}
+
+
 # If hyperparameter tuning is enabled, replace the models with tuned versions
 if tune_hyperparameters:
     tuned_models = {}
@@ -186,7 +246,7 @@ if tune_hyperparameters:
         print(f"Tuning hyperparameters for {name}...")
         grid = param_grids.get(name, {})
         if grid:  # if there's a non-empty grid
-            gs = GridSearchCV(model, grid, cv=3, scoring='r2', n_jobs=-1)
+            gs = GridSearchCV(model, grid, cv=3, scoring='neg_mean_squared_error', n_jobs=-1)
             gs.fit(X_train, y_train)
             tuned_models[name] = gs.best_estimator_
             print(f"Best parameters for {name}: {gs.best_params_}")
@@ -231,7 +291,7 @@ for name, model in models.items():
 
 # Create a DataFrame for the results and sort by test R2 score
 results_df = pd.DataFrame(results).T
-results_df = results_df.sort_values(by='R2_test', ascending=False)
+results_df = results_df.sort_values(by='MSE_test', ascending=True)
 print(results_df)
 
 # ------------------------------------------------------
@@ -318,7 +378,7 @@ for name, model in models.items():
     
     # Plot 1: Scatter plot of predictions
     ax1.scatter(y_train, y_pred_train, color='blue', alpha=0.5, label='Train')
-    ax1.scatter(y_val, y_pred_val, color='green', alpha=0.5, label='Validation')
+    # ax1.scatter(y_val, y_pred_val, color='green', alpha=0.5, label='Validation')
     ax1.scatter(y_test, y_pred_test, color='red', alpha=0.5, label='Test')
     
     ax1.set_title(f'{name} Predictions')

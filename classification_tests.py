@@ -24,7 +24,7 @@ from ML_utils import normalize_data_and_split, plot_predictions
 tune_hyperparameters = False  # Set to False to disable tuning
 
 # Datasets to process
-datasets = ["df_ready_date", "df_ready_both"]
+datasets = ["df_ready_date"]
 
 # Feature selection approaches
 feature_selections = {
@@ -34,7 +34,7 @@ feature_selections = {
 }
 
 # Number of top correlated features to use
-n_top_features = 15
+n_top_features = 35
 
 # Base directory for results
 results_base_dir = 'results/classification'
@@ -113,7 +113,11 @@ for dataset_name in datasets:
     # Transform the categorical target from [-1, 0, 1] to [0, 1, 2]
     target_mapping = {-1: 0, 0: 1, 1: 2}
     df['categorical_target'] = df['categorical_target'].map(target_mapping)
-    
+
+    df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
+    # Drop individual app.Categorical features
+    df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
+            
     # Get numeric columns for correlation analysis
     df_numeric = df.select_dtypes(include=[np.number])
     
@@ -126,17 +130,12 @@ for dataset_name in datasets:
     print(correlation_with_target)
     print("\nCorrelation with CLASSIFICATION target:")
     print(correlation_with_CATtarget)
-    
-    # Combine all app.Categorical features into one
-    df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
-    # Drop individual app.Categorical features
-    df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
-    
+        
     # Prepare all potential features
     all_features = df.columns.to_list()
     
-    # Remove features that should not be used in models
-    for col in ['id_num', 'target', 'categorical_target', 'date', 'next_date', 'time_of_day_non_encoded', ]:
+    # Remove features that should naot be used in models
+    for col in ['id_num', 'target', 'categorical_target', 'date', 'next_date', 'time_of_day_non_encoded']:
         if col in all_features:
             all_features.remove(col)
     
@@ -166,7 +165,7 @@ for dataset_name in datasets:
             id_col='id_num',
             timestamp_col='date',
             per_participant_normalization=True,
-            scaler_type="StandardScaler",
+            scaler_type="MinMaxScaler",
             test_size=0.1,
             val_size=0.000000000001,
             random_state=42
@@ -189,7 +188,7 @@ for dataset_name in datasets:
             'Logistic Regression': {
                 'C': [0.01, 0.1, 1.0, 10.0],
                 'solver': ['lbfgs', 'saga'],
-                'penalty': ['l2', 'none']
+                'penalty': ['l2', 'None']
             },
             
             'Decision Tree': {

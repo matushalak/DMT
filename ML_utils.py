@@ -423,11 +423,11 @@ def plot_predictions(
     figsize: Tuple[int, int] = (12, 6),
     title: str = 'Predicted vs Actual Values',
     save_path: Optional[str] = None,
-    show_plot: bool = True,
-    max_participants: Optional[int] = None
+    show_plot: bool = True
 ) -> None:
     """
-    Plot timeseries predictions against actual values.
+    Plot all timeseries predictions for the specified dataset on a single plot,
+    coloring the background spans for each participant, without including participants in the legend.
 
     Args:
         y_true: True target values.
@@ -438,166 +438,72 @@ def plot_predictions(
         title: Plot title.
         save_path: If provided, save the plot to this path.
         show_plot: Whether to display the plot.
-        max_participants: Maximum number of participants to plot (None for all).
     """
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
-    from typing import Dict, Tuple, Optional
-    
-    # Get indices for the specified dataset
+    from matplotlib.lines import Line2D
+
+    # Retrieve indices for desired dataset
     indices_key = f'X_{dataset}_indices'
     if indices_key not in metadata:
         raise ValueError(f"Dataset '{dataset}' not found in metadata")
-    
     indices = metadata[indices_key]
-    
-    # Get the original dataframe
-    df_original = metadata['df_original'].copy()
-    
-    # Create DataFrame for plotting
-    # First ensure indices are in the correct format
     if isinstance(indices, pd.Series):
         indices = indices.values
-    
-    # Check if indices exist in the original dataframe index
-    valid_indices = [idx for idx in indices if idx in df_original.index]
-    if len(valid_indices) < len(indices):
-        print(f"Warning: {len(indices) - len(valid_indices)} indices not found in original dataframe")
-    
-    try:
-        # Try to create the plotting dataframe
-        df_plot = df_original.loc[valid_indices].copy()
-        
-        # Add predictions and actual values
-        if len(y_pred) != len(df_plot):
-            print(f"Warning: Length mismatch between predictions ({len(y_pred)}) and dataframe ({len(df_plot)})")
-            # Use the smaller length
-            min_len = min(len(y_pred), len(df_plot))
-            df_plot = df_plot.iloc[:min_len].copy()
-            df_plot['Predicted'] = y_pred[:min_len]
-            df_plot['Actual'] = y_true.values[:min_len]
-        else:
-            df_plot['Predicted'] = y_pred
-            df_plot['Actual'] = y_true.values
-        
-        # Ensure the id_col exists
-        if metadata['id_col'] not in df_plot.columns:
-            print(f"Warning: ID column '{metadata['id_col']}' not found in dataframe")
-            # Create a dummy ID column
-            df_plot[metadata['id_col']] = 'participant_1'
-        
-        # Try to sort by timestamp if available
-        if 'timestamp_col' in metadata and metadata['timestamp_col'] in df_plot.columns:
-            timestamp_col = metadata['timestamp_col']
-            # Check for duplicates in columns before sorting
-            if df_plot.columns.duplicated().any():
-                # Make column names unique using a simple approach
-                print("Warning: Duplicate column names found, making them unique")
-                
-                # Custom function to make column names unique
-                def make_unique_cols(columns):
-                    seen = {}
-                    result = []
-                    for item in columns:
-                        if item in seen:
-                            seen[item] += 1
-                            result.append(f"{item}_{seen[item]}")
-                        else:
-                            seen[item] = 0
-                            result.append(item)
-                    return result
-                
-                # Apply the function to create unique column names
-                new_columns = make_unique_cols(df_plot.columns)
-                df_plot.columns = new_columns
-                
-                # Update the column name if it was changed
-                if metadata['id_col'] not in df_plot.columns:
-                    possible_id_cols = [col for col in df_plot.columns if metadata['id_col'] in col]
-                    if possible_id_cols:
-                        metadata['id_col'] = possible_id_cols[0]
-                        print(f"ID column renamed to {metadata['id_col']}")
-                if timestamp_col not in df_plot.columns:
-                    possible_ts_cols = [col for col in df_plot.columns if timestamp_col in col]
-                    if possible_ts_cols:
-                        timestamp_col = possible_ts_cols[0]
-                        print(f"Timestamp column renamed to {timestamp_col}")
-            
-            # Now try sorting
-            try:
-                df_plot = df_plot.sort_values(by=[metadata['id_col'], timestamp_col])
-            except Exception as e:
-                print(f"Warning: Error while sorting by {metadata['id_col']} and {timestamp_col}: {str(e)}")
-                print("Columns available:", df_plot.columns.tolist())
-        
-        # Get unique participants
-        participants = df_plot[metadata['id_col']].unique()
-        
-        # Limit the number of participants if specified
-        if max_participants is not None and len(participants) > max_participants:
-            print(f"Limiting to {max_participants} participants out of {len(participants)}")
-            participants = participants[:max_participants]
-        
-        # Plot separately for each participant
-        for participant_id in participants:
-            participant_data = df_plot[df_plot[metadata['id_col']] == participant_id]
-            
-            if len(participant_data) == 0:
-                print(f"Warning: No data for participant {participant_id}")
-                continue
-                
-            plt.figure(figsize=figsize)
-            
-            # Determine x-axis
-            if 'timestamp_col' in metadata and metadata['timestamp_col'] in participant_data.columns:
-                x_values = participant_data[metadata['timestamp_col']]
-                x_label = metadata['timestamp_col']
-            else:
-                x_values = range(len(participant_data))
-                x_label = 'Data Point'
-            
-            # Plot the data
-            plt.plot(x_values, participant_data['Actual'], 'b-', label='Actual')
-            plt.plot(x_values, participant_data['Predicted'], 'r--', label='Predicted')
-            
-            # Calculate metrics for this participant
-            mae = np.mean(np.abs(participant_data['Actual'] - participant_data['Predicted']))
-            rmse = np.sqrt(np.mean((participant_data['Actual'] - participant_data['Predicted'])**2))
-            
-            # Add metrics to plot
-            plt.text(0.02, 0.95, f"MAE: {mae:.4f}\nRMSE: {rmse:.4f}", 
-                     transform=plt.gca().transAxes, 
-                     bbox=dict(facecolor='white', alpha=0.8))
-            
-            plt.xlabel(x_label)
-            plt.ylabel('Value')
-            plt.title(f"{title} - Participant {participant_id}")
-            plt.legend()
-            plt.grid(True)
-            plt.tight_layout()
-            
-            if save_path:
-                # Ensure the participant_id is string and clean for filenames
-                safe_id = str(participant_id).replace('/', '_').replace('\\', '_')
-                plt.savefig(f"{save_path}_{dataset}_{safe_id}.png")
-            
-            if show_plot:
-                plt.show()
-            else:
-                plt.close()
-                
-    except Exception as e:
-        print(f"Error plotting predictions: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-        # Print diagnostic information
-        print("\nDiagnostic information:")
-        print(f"Dataset: {dataset}")
-        print(f"Indices shape: {np.shape(indices)}")
-        print(f"y_true shape: {np.shape(y_true)}")
-        print(f"y_pred shape: {np.shape(y_pred)}")
-        print(f"Metadata keys: {list(metadata.keys())}")
-        print(f"Original dataframe shape: {metadata['df_original'].shape}")
-        print(f"Original dataframe columns: {metadata['df_original'].columns.tolist()}")
+
+    # Subset and sort original dataframe
+    df = metadata['df_original'].copy()
+    df = df.loc[indices].copy()
+    if 'timestamp_col' in metadata:
+        ts = metadata['timestamp_col']
+        if ts in df.columns:
+            df = df.sort_values([metadata['id_col'], ts])
+
+    # Attach predictions and actuals (align lengths)
+    n = min(len(df), len(y_pred))
+    df = df.iloc[:n].copy()
+    df['Predicted'] = y_pred[:n]
+    df['Actual']    = y_true.values[:n]
+
+    # Identify participants in display order
+    participants = df[metadata['id_col']].unique()
+    participant_col = metadata['id_col']
+
+    # Create overall plot
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(len(df))
+
+    # Color spans per participant
+    cmap = plt.get_cmap('tab20', len(participants))
+    for idx, pid in enumerate(participants):
+        mask = df[participant_col] == pid
+        inds = np.where(mask)[0]
+        start, end = inds[0], inds[-1]
+        ax.axvspan(start, end, color=cmap(idx), alpha=0.2)
+
+    # Plot lines
+    ax.plot(x, df['Actual'], linestyle='-',  label='Actual')
+    ax.plot(x, df['Predicted'], linestyle='--', label='Predicted')
+
+    # Legend for lines only
+    line_handles = [
+        Line2D([0], [0], color='black', linestyle='-', label='Actual'),
+        Line2D([0], [0], color='black', linestyle='--', label='Predicted')
+    ]
+    ax.legend(handles=line_handles, loc='upper right')
+
+    ax.set_xlabel('Time step')
+    ax.set_ylabel('Value')
+    ax.set_title(f"{title} - {dataset.capitalize()}")
+    ax.grid(True)
+    plt.tight_layout()
+
+    # Save if requested
+    if save_path:
+        plt.savefig(f"{save_path}_{dataset}.png")
+
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()

@@ -22,7 +22,7 @@ from sklearn.ensemble import GradientBoostingClassifier
 from ML_utils import normalize_data_and_split, plot_predictions
 # ------------------------------------------------------
 # Flag to control hyperparameter tuning
-tune_hyperparameters = False  # set to False to disable tuning
+tune_hyperparameters = True  # set to False to disable tuning
 
 # dataset and label details
 dataset_name = "df_ready_date"
@@ -35,47 +35,62 @@ df = pd.read_csv(f'tables/imputed/{dataset_name}.csv')
 target_mapping = {-1: 0, 0: 1, 1: 2}
 df['categorical_target'] = df['categorical_target'].map(target_mapping)
 
-df_numeric = df.select_dtypes(include=[np.number])
-
-# # check correlations between features and target
-correlations = df_numeric.corr()
-correlation_with_target = correlations["target"].sort_values(ascending=False)
-correlation_with_CATtarget = correlations["categorical_target"].sort_values(ascending=False)
-print("Correlation with REGRESSION target:")
-print(correlation_with_target)
-print("Correlation with CLASSIFICATION target:")
-print(correlation_with_CATtarget)
-
 # combine all app.Categorical features into one
 df['appCat'] = df[df.columns[df.columns.str.contains('appCat')]].sum(axis=1)
 # Drop individual app.Categorical features
 df.drop(columns=df.columns[df.columns.str.contains('appCat.')], inplace=True)
 
-# Remove features that should not be used in the model
-features = df.columns.to_list()
-# features.remove('id_num')
-features.remove('target')  # Make sure this matches your actual target column name
-features.remove('categorical_target')  # Make sure this matches your actual target column name
-features.remove('date')  # Remove date if present
-features.remove("next_date")
+df_numeric = df.select_dtypes(include=[np.number])
 
-# features = ["id_num", "mood_mean_daily"] # for baseline model
 
-if "time_of_day_non_encoded" in features:
-    features.remove("time_of_day_non_encoded")
 
-print("features", features)
+# # check correlations between features and target
+correlations = df_numeric.corr()
+# correlation_with_target = correlations["target"].sort_values(ascending=False)
+correlation_with_CATtarget = correlations["categorical_target"].abs().sort_values(ascending=False)
+
+n_top_features = 35
+top_features = correlation_with_CATtarget.drop(['target', 'categorical_target'], errors='ignore')
+top_features = top_features.abs().sort_values(ascending=False).index[:n_top_features].tolist()
+
+
+print("Correlation with CLASSIFICATION target:")
+print(correlation_with_CATtarget)
+
+# select 35 most correlated features with CATtarget
+
+
+
+
+
+# # Remove features that should not be used in the model
+# features = df.columns.to_list()
+
+# # features.remove('id_num')
+# features.remove('target')  # Make sure this matches your actual target column name
+# features.remove('categorical_target')  # Make sure this matches your actual target column name
+# features.remove('date')  # Remove date if present
+# features.remove("next_date")
+# # remove anything not in the top_features list
+# features = [feature for feature in features if feature in top_features]
+
+# # features = ["id_num", "mood_mean_daily"] # for baseline model
+
+# if "time_of_day_non_encoded" in features:
+#     features.remove("time_of_day_non_encoded")
+
+print("features", top_features, "count", len(top_features))
 
 
 # Update the function call to include timestamp_col parameter
 X_train, X_val, X_test, y_train, y_val, y_test, scalers, metadata = normalize_data_and_split(
     df,
-    features=features,
+    features=top_features,
     target_col="categorical_target",  # Changed to categorical_target
     id_col='id_num',
     timestamp_col='date',  # Add this parameter for timeseries plotting,
     per_participant_normalization=True,
-    scaler_type="StandardScaler",
+    scaler_type="MinMaxScaler",
     test_size=0.1,
     val_size=0.000000000001,
     random_state=42
@@ -95,50 +110,110 @@ models = {
 
 param_grids = {
     'Logistic Regression': {
-        'C': [0.01, 0.1, 1.0, 10.0],
-        'solver': ['lbfgs', 'saga'],
-        'penalty': ['l2', 'none']
+        'C': [0.001, 0.01, 0.1],          # stronger regularization
+        'penalty': ['l2'],               # stick to one penalty to reduce variance
+        'solver': ['saga'],              # saga supports l2 and large datasets
+        'class_weight': ['balanced']     # handle any class imbalance
     },
     
     'Decision Tree': {
-        'max_depth': [2, 3, 4, 5],  # Limiting depth to prevent overfitting
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4]
+        'max_depth': [2, 3],             # keep trees shallow
+        'min_samples_split': [10, 20, 50],
+        'min_samples_leaf': [5, 10, 20],
+        'class_weight': ['balanced']
     },
     
     'Random Forest': {
-        'n_estimators': [50, 100, 200],
-        'max_depth': [3, 4, 5],  # More limited depth to control overfitting
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'bootstrap': [True, False]
+        'n_estimators': [100, 200],      # moderate number of trees
+        'max_depth': [3, 5],             # shallow trees
+        'min_samples_split': [10, 20, 50],
+        'min_samples_leaf': [5, 10, 20],
+        'bootstrap': [True],
+        'class_weight': ['balanced']
     },
     
     'XGBoost Classifier': {
-        'n_estimators': [50, 100, 200],
-        'max_depth': [2, 3, 4],  # More restricted depth
-        'learning_rate': [0.01, 0.05, 0.1],
-        'subsample': [0.8, 0.9, 1.0],
-        'colsample_bytree': [0.8, 0.9, 1.0],
-        'gamma': [0, 0.1, 0.2],
-        'reg_alpha': [0, 0.1, 1.0],
-        'reg_lambda': [0.1, 1.0, 10.0]
+        'n_estimators': [100, 200],
+        'max_depth': [2, 3],             # shallow trees
+        'learning_rate': [0.01, 0.05],   # slower learning to avoid over‑fit
+        'subsample': [0.6, 0.8],         # row sampling
+        'colsample_bytree': [0.6, 0.8],   # column sampling
+        'gamma': [0.1, 0.2],             # min loss reduction
+        'reg_alpha': [0.1, 1.0],         # L1 regularization
+        'reg_lambda': [1.0, 10.0],       # L2 regularization
+        'scale_pos_weight': [1]          # if classes imbalanced
     },
     
     'Gradient Boosting': {
-        'n_estimators': [50, 100, 200],
-        'learning_rate': [0.01, 0.05, 0.1],
-        'max_depth': [2, 3, 4],
-        'min_samples_split': [2, 5],
-        'subsample': [0.8, 0.9, 1.0]
+        'n_estimators': [100, 200],
+        'learning_rate': [0.01, 0.05],
+        'max_depth': [2, 3],
+        'min_samples_split': [10, 20],
+        'min_samples_leaf': [5, 10],
+        'subsample': [0.6, 0.8]
     },
     
     'SVC': {
-        'C': [0.1, 1.0, 10.0],
+        'C': [0.01, 0.1, 1.0],            # smaller C ⇒ stronger margin
         'kernel': ['linear', 'rbf'],
-        'gamma': ['scale', 'auto', 0.1, 0.01],
+        'gamma': [0.01, 0.001],          # avoid very spiky kernels
+        'class_weight': ['balanced']
     }
 }
+
+param_grids['XGBoost Classifier'] = {
+    # train with a larger max number but let early‑stopping find the best round
+    'n_estimators': [500, 1000],
+
+    # very shallow trees
+    'max_depth': [2, 3],
+
+    # slower learning rates
+    'learning_rate': [0.005, 0.01],
+
+    # stronger row/column sampling
+    'subsample': [0.5, 0.7],
+    'colsample_bytree': [0.5, 0.7],
+
+    # require a larger loss reduction to make a split
+    'gamma': [0.2, 0.5],
+
+    # increase the minimum sum of instance weight needed in a child
+    'min_child_weight': [5, 10],
+
+    # heavier L1/L2 regularization
+    'reg_alpha': [1.0, 5.0],
+    'reg_lambda': [10.0, 50.0],
+
+    # keep class‑weight scaling at 1 unless you need it
+    'scale_pos_weight': [1]
+}
+
+param_grids['Random Forest'] = {
+    # moderate number of trees
+    'n_estimators': [100, 200],
+
+    # force very shallow trees
+    'max_depth': [3, 5],
+
+    # require each split to have more samples
+    'min_samples_split': [20, 50],
+    'min_samples_leaf': [10, 20],
+
+    # reduce number of features considered at each split
+    'max_features': ['sqrt', 0.3, 0.5],
+
+    # limit bootstrap sample size
+    'bootstrap': [True],
+    'max_samples': [0.6, 0.8],        
+
+    # cost‐complexity pruning
+    'ccp_alpha': [0.001, 0.01],
+
+    # handle class imbalance
+    'class_weight': ['balanced']
+}
+
 
 # If hyperparameter tuning is enabled, replace the models with tuned versions
 if tune_hyperparameters:

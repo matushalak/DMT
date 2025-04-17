@@ -24,12 +24,12 @@ from ML_utils import normalize_data_and_split, plot_predictions
 tune_hyperparameters = False  # set to False to disable tuning
 
 # Datasets to analyze
-dataset_names = ["df_ready_date", "df_ready_both"]
+dataset_names = ["df_ready_date"]
 
 # Feature selection approaches
 approaches = {
     "baseline": {"description": "Single feature baseline model"},
-    "top_correlated": {"description": "Top correlated features", "n_features": 10},
+    "top_correlated": {"description": "Top correlated features", "n_features": 35},
     "all_features": {"description": "All features"}
 }
 
@@ -296,7 +296,7 @@ def plot_model_predictions(
         
         # Plot 1: Scatter plot of predictions
         ax1.scatter(y_train, y_pred_train, color='blue', alpha=0.5, label='Train')
-        ax1.scatter(y_val, y_pred_val, color='green', alpha=0.5, label='Validation')
+        # ax1.scatter(y_val, y_pred_val, color='green', alpha=0.5, label='Validation')
         ax1.scatter(y_test, y_pred_test, color='red', alpha=0.5, label='Test')
         
         ax1.set_title(f'{name} Predictions')
@@ -343,7 +343,7 @@ def plot_model_predictions(
         
         # Create bars
         ax2.bar(r1, train_values, width=bar_width, label='Train', color='blue')
-        ax2.bar(r2, val_values, width=bar_width, label='Validation', color='green')
+        # ax2.bar(r2, val_values, width=bar_width, label='Validation', color='green')
         ax2.bar(r3, test_values, width=bar_width, label='Test', color='red')
         
         # Add labels and legend
@@ -536,7 +536,7 @@ def run_analysis(dataset_name, approach, n_correlated=15):
         per_participant_normalization=True,
         scaler_type="StandardScaler",
         test_size=0.1,
-        val_size=0.1,
+        val_size=0.0001,
         random_state=42
     )
     

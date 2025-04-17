@@ -23,7 +23,7 @@ from ray.tune.schedulers import ASHAScheduler
 
 from lstm_utils import LSTMModel, SimpleRNNModel, GRUModel
 from lstm_utils import train_and_evaluate
-from lstm_utils import save_model, load_model, simple_hyperparameter_tuning, save_predictions_to_csv, load_and_prepare_csv, plot_timeseries_subplots_date
+from lstm_utils import save_model, load_model, simple_hyperparameter_tuning, save_predictions_to_csv, load_and_prepare_csv, plot_timeseries_subplots_date, plot_timeseries_subplots_both
 
 
 # --- Mac acceleration ---
@@ -125,7 +125,7 @@ if __name__ == "__main__":
             
             # Training parameters
             "learning_rate": 0.001,                 # Learning rate for Adam optimizer
-            "num_epochs": 20,                       # Maximum number of training epochs
+            "num_epochs": 10,                       # Maximum number of training epochs
             "clip_gradients": False,                 # Whether to use gradient clipping
             "max_grad_norm": 1.0,                   # Maximum gradient norm if clipping
             

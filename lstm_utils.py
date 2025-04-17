@@ -2370,7 +2370,7 @@ def load_and_prepare_csv(csv_path):
     df.sort_values(['participant_id', 'date'], inplace=True)
     return df
 
-def plot_timeseries_subplots_date(df, split_name):
+def plot_timeseries_subplots_both(df, split_name):
     """
     Create a grid of time series subplots for all participants showing the actual vs predicted values.
     Instead of using date information on the x-axis, each plot shows time points.
@@ -2382,7 +2382,7 @@ def plot_timeseries_subplots_date(df, split_name):
         split_name (str): Name of the dataset split (e.g., "Train", "Val", "Test").
     """
     # Get unique participant IDs
-    participants = df['participant_id'].unique()
+    participants = df['participant_id'].unique()[:9]
     n = len(participants)
     
     # Determine grid size (using a square-ish layout)
@@ -2397,10 +2397,11 @@ def plot_timeseries_subplots_date(df, split_name):
     
     # Loop through each participant and plot time series using time points on x-axis.
     for i, pid in enumerate(participants):
+
         ax = axes_flat[i]
         df_pid = df[df['participant_id'] == pid]
         time_points = np.arange(len(df_pid))  # Use sequential time points instead of dates
-        
+
         ax.plot(time_points, df_pid['actual'], marker='o', label='Actual')
         ax.plot(time_points, df_pid['predicted'], marker='x', label='Predicted')
         ax.set_title(f"Participant {pid}")
@@ -2414,6 +2415,7 @@ def plot_timeseries_subplots_date(df, split_name):
         
         # Set constant y-axis limits from 5 to 10
         ax.set_ylim(5, 10)
+
     
     # Remove any extra subplots if participants < rows * cols
     for j in range(i + 1, rows * cols):
@@ -2430,7 +2432,7 @@ def plot_timeseries_subplots_date(df, split_name):
     plt.close(fig)
     print(f"Saved combined time series plot to {file_path}")
 
-def plot_timeseries_subplots_both(df, split_name):
+def plot_timeseries_subplots_date(df, split_name):
     """
     Create a grid of time series subplots for all participants showing the actual vs predicted values.
     Instead of using date information on the x-axis, each plot shows time points.
@@ -2469,13 +2471,16 @@ def plot_timeseries_subplots_both(df, split_name):
             print(f"  predicted range: {df_pid['predicted'].min()} to {df_pid['predicted'].max()}")
             print(f"  time_points: min={time_points.min()} max={time_points.max()}")
         
-        ax.plot(time_points, df_pid['actual'], marker='o', label='Actual')
+        ax.plot(time_points[::3], df_pid['actual'].iloc[::3], marker='o', label='Actual')
         ax.plot(time_points, df_pid['predicted'], marker='x', label='Predicted')
         ax.set_title(f"Participant {pid}")
         ax.set_xlabel("Time Point")
         ax.set_ylabel("Target Value")
         ax.legend(loc='best')
         ax.grid(True, linestyle="--", alpha=0.7)
+        
+        # If you want to set xticks, you can uncomment the line below
+        ax.set_xticks(time_points[::3])
         
         # If you want to set xticks, you can uncomment the line below
         # ax.set_xticks(time_points)
