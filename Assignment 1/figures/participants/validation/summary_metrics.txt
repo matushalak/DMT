@@ -1,0 +1,168 @@
+Validation Set Overall Metrics:
+  MAE: 0.2630
+  RMSE: 0.3733
+  R²: 0.7510
+
+Per-Participant Metrics:
+  Participant 1:
+    MAE: 0.0419
+    RMSE: 0.0456
+    R²: -9143838720.0000
+    Samples: 18
+
+  Participant 2:
+    MAE: 0.4817
+    RMSE: 0.4837
+    R²: 0.0000
+    Samples: 17
+
+  Participant 3:
+    MAE: 0.0670
+    RMSE: 0.0694
+    R²: -21159645184.0000
+    Samples: 20
+
+  Participant 5:
+    MAE: 0.1902
+    RMSE: 0.1910
+    R²: -40103518208.0000
+    Samples: 22
+
+  Participant 6:
+    MAE: 0.0169
+    RMSE: 0.0176
+    R²: -1362445696.0000
+    Samples: 19
+
+  Participant 7:
+    MAE: 0.6688
+    RMSE: 0.6766
+    R²: -503289905152.0000
+    Samples: 20
+
+  Participant 8:
+    MAE: 0.2690
+    RMSE: 0.2785
+    R²: -26.0450
+    Samples: 26
+
+  Participant 9:
+    MAE: 0.7807
+    RMSE: 0.7827
+    R²: -2694536232960.0000
+    Samples: 19
+
+  Participant 12:
+    MAE: 0.1707
+    RMSE: 0.1754
+    R²: 0.0000
+    Samples: 16
+
+  Participant 13:
+    MAE: 0.0575
+    RMSE: 0.0631
+    R²: -17529507840.0000
+    Samples: 22
+
+  Participant 14:
+    MAE: 0.0082
+    RMSE: 0.0093
+    R²: 0.0000
+    Samples: 19
+
+  Participant 15:
+    MAE: 0.3273
+    RMSE: 0.3280
+    R²: 0.0000
+    Samples: 23
+
+  Participant 16:
+    MAE: 0.2191
+    RMSE: 0.2198
+    R²: 0.0000
+    Samples: 22
+
+  Participant 17:
+    MAE: 0.2426
+    RMSE: 0.2528
+    R²: -2.9129
+    Samples: 26
+
+  Participant 19:
+    MAE: 0.0456
+    RMSE: 0.0525
+    R²: -12121820160.0000
+    Samples: 19
+
+  Participant 20:
+    MAE: 0.3256
+    RMSE: 0.3263
+    R²: 0.0000
+    Samples: 19
+
+  Participant 23:
+    MAE: 0.1155
+    RMSE: 0.1318
+    R²: 0.0000
+    Samples: 16
+
+  Participant 24:
+    MAE: 0.2765
+    RMSE: 0.2976
+    R²: -97350737920.0000
+    Samples: 23
+
+  Participant 25:
+    MAE: 0.0503
+    RMSE: 0.0503
+    R²: 0.0000
+    Samples: 12
+
+  Participant 26:
+    MAE: 0.6494
+    RMSE: 0.6779
+    R²: 0.1826
+    Samples: 29
+
+  Participant 27:
+    MAE: 0.2257
+    RMSE: 0.2260
+    R²: 0.0000
+    Samples: 17
+
+  Participant 28:
+    MAE: 0.0107
+    RMSE: 0.0113
+    R²: 0.0000
+    Samples: 16
+
+  Participant 29:
+    MAE: 1.0183
+    RMSE: 1.0222
+    R²: 0.0000
+    Samples: 18
+
+  Participant 30:
+    MAE: 0.1092
+    RMSE: 0.1095
+    R²: -52731006976.0000
+    Samples: 19
+
+  Participant 31:
+    MAE: 0.3958
+    RMSE: 0.3963
+    R²: 0.0000
+    Samples: 18
+
+  Participant 32:
+    MAE: 0.0021
+    RMSE: 0.0024
+    R²: 0.0000
+    Samples: 17
+
+  Participant 33:
+    MAE: 0.0319
+    RMSE: 0.0328
+    R²: -4724372480.0000
+    Samples: 19
+
