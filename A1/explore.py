@@ -18,6 +18,23 @@ def main():
     # (no change w times of day, consistently values in middle of the night)
     explore_sleep()
 
+def explore_initial_correlations():
+    df = pd.read_csv('tables/pivot_tables_daily/daily_pivot_table_date.csv', index_col=False)
+    cols_to_drop = [col for col in df.columns 
+                    if any(substr in col 
+                           for substr in ['min', 'max', 'std', 'first', 'last', 'tod']) ]
+    df = df.drop(columns=["id_num", "date"]+cols_to_drop, errors="ignore")
+    corr = df.corr()
+    ranking = corr['mood_mean_daily'].abs().sort_values(ascending=False)
+    sorted_cols = ranking.index.tolist()
+    corr = corr.loc[sorted_cols, sorted_cols]
+    hm = sns.heatmap(corr, square=True, cmap='mako', cbar_kws={'shrink':.75})
+    hm.set_xticklabels(hm.get_xticklabels(), rotation=45, ha='right',fontsize=5)
+    hm.set_yticklabels(hm.get_yticklabels(),fontsize=7)
+    plt.tight_layout()
+    plt.savefig('initial_corr_exploration.png', dpi = 300)
+    plt.show()
+
 
 def explore_correlations(method='date'):
     df = preprocess_pipeline(load_from_file=True, method=method)
@@ -383,7 +400,8 @@ def explore_hours():
 
 
 if __name__ == '__main__':
-    explore_sleep()
+    explore_initial_correlations()
+    # explore_sleep()
     # pairplot_by_substrings(substrings=['mood', 'circumplex', 
     #                                    'activity', 'screen', 
     #                                    ('wake', 'bed', 'sleep'), 

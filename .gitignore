@@ -1,6 +1,9 @@
 *.html
 *.png
 tables/
+submission_sample.csv
+*_VU_DM.csv
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
