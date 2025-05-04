@@ -3,7 +3,7 @@
 tables/
 submission_sample.csv
 *_VU_DM.csv
-
+*.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

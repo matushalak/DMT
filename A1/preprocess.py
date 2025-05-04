@@ -4,7 +4,7 @@ import numpy as np
 import os
 from typing import Literal
 import impute as IMP
-from features import engineer_features
+from preprocess import engineer_features
 
 # --------- Preprocess pipeline -----------
 def preprocess_pipeline(filename: str = 'dataset_mood_smartphone.csv',
