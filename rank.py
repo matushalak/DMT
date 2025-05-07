@@ -3,7 +3,7 @@ import pandas as pd
 import lightgbm as lgb
 import matplotlib.pyplot as plt
 
-from preprocess import preprocess_df, add_features
+from preprocess import preprocess_df, add_features, add_prop_rates, project_prop_rates_with_fallback
 
 def train_val_split(DF:pd.DataFrame, 
                     train_prop:float = 0.7
@@ -18,7 +18,12 @@ def train_val_split(DF:pd.DataFrame,
     val_sids   = np.setdiff1d(all_searchIDs, train_sids)
 
     TRAIN = DF[DF['srch_id'].isin(train_sids)].copy()
-    VAL   = DF[DF['srch_id'].isin(val_sids)].copy()
+    # TRAIN = add_prop_rates(TRAIN)
+
+
+    VAL = DF[DF['srch_id'].isin(val_sids)].copy()
+    # VAL = project_prop_rates_with_fallback(TRAIN, VAL)
+
 
     # Compute search id group sizes
     query_size_train = TRAIN.groupby('srch_id').size().to_numpy()
@@ -56,7 +61,8 @@ def train_model(plot:bool = True
     # LambdaMART model
     model = lgb.LGBMRanker(objective='lambdarank', metric='ndcg', 
                         importance_type='gain',
-                        #    n_estimators=500 # number of boosting rounds (iterations)
+                        learning_rate=0.05,
+                        n_estimators=500, # number of boosting rounds (iterations)
                         n_jobs=-1, # parallel processing
                         )
 
@@ -82,11 +88,12 @@ def train_model(plot:bool = True
 
         # importance
         # overall
-        lgb.plot_importance(model, max_num_features=12)
+        lgb.plot_importance(model, max_num_features=15)
         plt.show()
         plt.close()
+        
         # gain
-        lgb.plot_importance(model, max_num_features=12,
+        lgb.plot_importance(model, max_num_features=15,
                             importance_type='gain')
         plt.show()
     
@@ -101,6 +108,7 @@ def get_predictions(model:lgb.LGBMRanker)-> pd.DataFrame:
     TESTDF = pd.read_csv('test_set_VU_DM.csv')
     # add relevant information from date-time 
     TESTDF = preprocess_df(TESTDF, TEST=True)
+    TESTDF = add_features(TESTDF)
     
     # Produce relevance predictions for each row
     X_test = TESTDF.drop(columns=['srch_id'])
@@ -119,5 +127,5 @@ def get_predictions(model:lgb.LGBMRanker)-> pd.DataFrame:
 
 if __name__ == '__main__':
     LambdaMART = train_model(plot=True)
-    # TEST_pred = get_predictions(LambdaMART)
-    # TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
+    TEST_pred = get_predictions(LambdaMART)
+    TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
