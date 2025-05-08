@@ -1,0 +1,290 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+import os
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+from xgboost import XGBClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.utils.class_weight import compute_sample_weight
+
+
+# clean input data
+def data_clean(input_data):
+    # Load the data
+    df = pd.read_csv(f"data/{input_data}_set_VU_DM.csv")
+
+    # Add relevant information from date-time, and remove the original date-time column
+    df['date_time'] = pd.to_datetime(df['date_time'])
+    df['month'] = df['date_time'].dt.month
+    df['weekday'] = df['date_time'].dt.weekday
+    df.drop(columns=['date_time'], inplace=True)
+
+    # Filter unrealistic prices (price_usd)
+    df = df[(df["price_usd"] >= 10) & (df["price_usd"] <= 1000)]
+
+    # to do for training only
+    if input_data == "training":
+        # Create label for training set: 5 for booking, 1 for click, 0 for nothing
+        df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
+
+        # Filter unrealistic gross_bookings_usd (only where it's not missing)
+        df = df[(df["gross_bookings_usd"].isna()) | ((df["gross_bookings_usd"] >= 10) & (df["gross_bookings_usd"] <= 2000))]
+
+    return df
+
+
+# add found features to dataframe
+def add_found_features(df, feature_specs, group_key="srch_id"):
+    """
+    Ensure that all desired relative features (e.g., rank/zscore/etc.) exist in df.
+    Only compute missing ones.
+    
+    Parameters:
+    - df: your DataFrame
+    - feature_specs: dict mapping base feature -> list of methods (e.g. ['pct_rank', 'zscore'])
+    - group_key: key to group by (usually 'srch_id')
+    
+    Returns:
+    - df with new features added
+    """
+    df = df.copy()
+    
+    for base_feat, methods in feature_specs.items():
+        if base_feat not in df.columns:
+            print(f"⚠️ Skipping '{base_feat}' (not in DataFrame)")
+            continue
+        
+        group = df.groupby(group_key)[base_feat]
+        
+        for method in methods:
+            new_col = f"{base_feat}_{method}"
+            if new_col in df.columns:
+                continue  # Skip if already exists
+            
+            if method == "pct_rank":
+                df[new_col] = group.rank(pct=True)
+            elif method == "minmax":
+                min_ = group.transform("min")
+                max_ = group.transform("max")
+                df[new_col] = (df[base_feat] - min_) / (max_ - min_ + 1e-6)
+            elif method == "zscore":
+                mean = group.transform("mean")
+                std = group.transform("std").replace(0, 1e-6)
+                df[new_col] = (df[base_feat] - mean) / std
+            elif method == "rank":
+                df[new_col] = group.rank(method="min")
+            else:
+                print(f"⚠️ Unknown method '{method}' for feature '{base_feat}'")
+
+    return df
+
+# found feature methods
+feature_methods = {
+    "price_usd": ["pct_rank", "minmax", "zscore", "rank"],
+    "prop_review_score": ["pct_rank", "zscore", "rank"],
+    "prop_location_score1": ["pct_rank", "minmax", "zscore", "rank"],
+    "prop_starrating": ["pct_rank", "minmax", "zscore", "rank"],
+    "prop_location_score2": ["pct_rank", "minmax", "zscore", "rank"],
+    "prop_log_historical_price": ["pct_rank", "minmax", "zscore", "rank"],
+    "comp5_rate_percent_diff": ["zscore"],
+    "comp8_rate": ["pct_rank", "zscore"],
+    "srch_query_affinity_score": ["pct_rank", "minmax", "zscore", "rank"],
+    "orig_destination_distance": ["pct_rank", "minmax", "zscore", "rank"],
+    "visitor_hist_adr_usd": ["pct_rank", "minmax", "zscore", "rank"],
+    "visitor_hist_starrating": ["pct_rank", "minmax", "zscore", "rank"],
+}
+
+def filter_final_features(df: pd.DataFrame) -> pd.DataFrame:
+    allowed_columns = [
+        'srch_id', 'site_id', 'visitor_location_country_id', 'visitor_hist_starrating',
+        'visitor_hist_adr_usd', 'prop_country_id', 'prop_id', 'prop_starrating',
+        'prop_review_score', 'prop_brand_bool', 'prop_location_score1', 'prop_location_score2',
+        'prop_log_historical_price', 'position', 'price_usd', 'promotion_flag',
+        'srch_length_of_stay', 'srch_booking_window', 'srch_query_affinity_score',
+        'orig_destination_distance', 'random_bool', 'comp8_rate_percent_diff',
+        'click_bool', 'gross_bookings_usd', 'booking_bool', 'label',
+        'price_usd_pct_rank', 'price_usd_minmax', 'price_usd_zscore', 'price_usd_rank',
+        'prop_review_score_pct_rank', 'prop_review_score_zscore', 'prop_review_score_rank',
+        'prop_location_score1_pct_rank', 'prop_location_score1_minmax',
+        'prop_location_score1_zscore', 'prop_location_score1_rank',
+        'prop_starrating_pct_rank', 'prop_starrating_minmax', 'prop_starrating_zscore',
+        'prop_starrating_rank', 'prop_location_score2_pct_rank', 'prop_location_score2_minmax',
+        'prop_location_score2_zscore', 'prop_location_score2_rank',
+        'prop_log_historical_price_pct_rank', 'prop_log_historical_price_minmax',
+        'prop_log_historical_price_zscore', 'prop_log_historical_price_rank',
+        'comp5_rate_percent_diff_zscore', 'comp8_rate_pct_rank', 'comp8_rate_zscore',
+        'srch_query_affinity_score_pct_rank', 'srch_query_affinity_score_minmax',
+        'srch_query_affinity_score_zscore', 'srch_query_affinity_score_rank',
+        'orig_destination_distance_pct_rank', 'orig_destination_distance_minmax',
+        'orig_destination_distance_zscore', 'orig_destination_distance_rank',
+        'visitor_hist_adr_usd_pct_rank', 'visitor_hist_adr_usd_minmax',
+        'visitor_hist_adr_usd_zscore', 'visitor_hist_adr_usd_rank',
+        'visitor_hist_starrating_pct_rank', 'visitor_hist_starrating_minmax',
+        'visitor_hist_starrating_zscore', 'visitor_hist_starrating_rank'
+    ]
+    
+    return df[[col for col in df.columns if col in allowed_columns]]
+
+
+
+# training model with own test data to find the best features
+def split_and_test(df):
+    # Split into train/val
+    all_search_ids = df["srch_id"].unique()
+    train_ids, val_ids = train_test_split(all_search_ids, test_size=0.1, random_state=42)
+
+    train_df = df[df["srch_id"].isin(train_ids)].copy()
+    val_df   = df[df["srch_id"].isin(val_ids)].copy()
+    train_df = train_df.sort_values(by="srch_id")
+    val_df   = val_df.sort_values(by="srch_id")
+
+    # Create group sizes
+    group_sizes_train = train_df.groupby("srch_id").size().tolist()
+    group_sizes_val = val_df.groupby("srch_id").size().tolist()
+
+    # Drop unwanted features
+    to_drop = ["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"]
+    existing_cols = [col for col in to_drop if col in val_df.columns]
+
+    # Final train/val sets
+    train_x = train_df.drop(columns=existing_cols)
+    val_x = val_df.drop(columns=existing_cols)
+    train_y = train_df["label"]
+    val_y = val_df["label"]
+
+    # Train LightGBM ranker
+    model = lgb.LGBMRanker(
+        objective="lambdarank",
+        metric="ndcg",
+        importance_type="gain",
+        n_estimators=200,
+        num_leaves=50,
+        learning_rate=0.1,
+        min_child_samples=10,
+        random_state=42
+    )
+
+    model.fit(
+        X=train_x,
+        y=train_y,
+        group=group_sizes_train,
+        eval_set=[(train_x, train_y), (val_x, val_y)],
+        eval_group=[group_sizes_train, group_sizes_val],
+        eval_at=[5],
+        eval_metric="ndcg",
+        eval_names=["train", "val"],
+    )
+
+    # ✅ Plot NDCG@5 over rounds
+    evals_result = model.evals_result_
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(evals_result["train"]["ndcg@5"], label="Train NDCG@5")
+    plt.plot(evals_result["val"]["ndcg@5"], label="Validation NDCG@5")
+    plt.xlabel("Boosting Round")
+    plt.ylabel("NDCG@5")
+    plt.title("NDCG@5 over Boosting Rounds")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    # ✅ Print final score
+    final_val_score = evals_result["val"]["ndcg@5"][-1]
+    print(f"Final NDCG@5 on validation set: {final_val_score:.5f}")
+
+
+
+# train and predict on training data with new test data
+def model_trainer(df):
+    # Drop unwanted features
+    drop_cols = ["srch_id", "position", "click_bool", "booking_bool", "gross_bookings_usd", "label"]
+    existing_cols = [col for col in drop_cols if col in df.columns]
+
+    # Final training set
+    train_x = df.drop(columns=existing_cols)
+    train_y = df["label"]
+    group_sizes_train = df.groupby("srch_id").size().tolist()
+
+    # Train model on all training data
+    model = lgb.LGBMRanker(
+        objective="lambdarank",
+        metric="ndcg",
+        importance_type="gain",
+        n_estimators=200,
+        num_leaves=50,
+        learning_rate=0.1,
+        min_child_samples=10,
+        random_state=42
+    )
+
+    model.fit(
+        X=train_x,
+        y=train_y,
+        group=group_sizes_train
+    )
+
+    return model
+
+
+
+
+# predict ranks of the test data
+def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Predicts relevance scores for the test set using the trained LGBMRanker model,
+    ranks hotels per search, and returns the formatted submission dataframe.
+    """
+    # Drop srch_id/prop_id for prediction
+    X_test = test_df.drop(columns=['srch_id'], errors='ignore')
+
+    # Predict
+    predicted_relevance = model.predict(X_test)
+    test_df = test_df.copy()
+    test_df["predicted_relevance"] = predicted_relevance
+
+    # Sort by srch_id and predicted score (descending)
+    ranked = test_df.sort_values(by=["srch_id", "predicted_relevance"], ascending=[True, False]).reset_index(drop=True)
+    return ranked[["srch_id", "prop_id"]]
+
+
+
+# run everything and export the submission file
+if __name__ == '__main__':
+    # Clean and prepare training data
+    train_df = data_clean("training")
+    train_df = add_found_features(train_df, feature_methods)
+    train_df = filter_final_features(train_df)
+
+    # Train model
+    model = model_trainer(train_df)
+
+    # Prepare and process test set
+    test_df = data_clean("test")
+    test_df = add_found_features(test_df, feature_methods)
+    test_df = filter_final_features(test_df)
+
+    # Get predictions
+    TEST_pred = get_predictions(model, test_df)
+    TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
+    print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
+
+
+
+
+
+# # for testing
+# if __name__ == '__main__':
+#     train_df = data_clean("training")
+#     train_df = add_found_features(train_df, feature_methods)
+#     train_df = filter_final_features(train_df)
+#     split_and_test(train_df)
+
+
+
+
