@@ -3,7 +3,7 @@ import pandas as pd
 import lightgbm as lgb
 import matplotlib.pyplot as plt
 
-from preprocess import preprocess_df, add_features, add_prop_rates, project_prop_rates_with_fallback
+from preprocess import preprocess_df, add_features
 
 def train_val_split(DF:pd.DataFrame, 
                     train_prop:float = 0.7
@@ -14,7 +14,7 @@ def train_val_split(DF:pd.DataFrame,
                         tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
     # Train/val split by srch_id
     all_searchIDs = DF['srch_id'].unique()
-    train_sids = np.random.choice(all_searchIDs, size=int(0.7 * len(all_searchIDs)), replace=False)
+    train_sids = np.random.choice(all_searchIDs, size=int(train_prop * len(all_searchIDs)), replace=False)
     val_sids   = np.setdiff1d(all_searchIDs, train_sids)
 
     TRAIN = DF[DF['srch_id'].isin(train_sids)].copy()
@@ -52,7 +52,7 @@ def train_model(plot:bool = True
 
     # feature engineering
     DF = add_features(DF)
-
+    
     # Test / Val split
     T_V_split = train_val_split(DF, train_prop=0.7)
     query_size_train, X_train, y_train = T_V_split[0]
@@ -61,9 +61,10 @@ def train_model(plot:bool = True
     # LambdaMART model
     model = lgb.LGBMRanker(objective='lambdarank', metric='ndcg', 
                         importance_type='gain',
-                        learning_rate=0.05,
-                        n_estimators=500, # number of boosting rounds (iterations)
                         n_jobs=-1, # parallel processing
+                        # These lines can juice out maybe +0.005
+                        learning_rate=0.05,
+                        n_estimators=300, # number of boosting rounds (iterations)
                         )
 
     # Train & Validate
@@ -127,5 +128,5 @@ def get_predictions(model:lgb.LGBMRanker)-> pd.DataFrame:
 
 if __name__ == '__main__':
     LambdaMART = train_model(plot=True)
-    TEST_pred = get_predictions(LambdaMART)
-    TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
+    # TEST_pred = get_predictions(LambdaMART)
+    # TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
