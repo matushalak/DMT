@@ -223,10 +223,11 @@ def split_and_test(df):
         objective="lambdarank",
         metric="ndcg",
         importance_type="gain",
-        n_estimators=200,
-        num_leaves=50,
+        n_estimators=300,
+        num_leaves=80,
         learning_rate=0.1,
         min_child_samples=10,
+        lambda_l1=1.0,
         random_state=42
     )
 
