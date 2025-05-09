@@ -28,6 +28,27 @@ def data_clean(input_data):
     # Filter unrealistic prices (price_usd)
     df = df[(df["price_usd"] >= 10) & (df["price_usd"] <= 1000)]
 
+    # List of competitor rate percent diff columns
+    comp_rate_cols = [
+        "comp1_rate_percent_diff",
+        "comp2_rate_percent_diff",
+        "comp3_rate_percent_diff",
+        "comp4_rate_percent_diff",
+        "comp5_rate_percent_diff",
+        "comp6_rate_percent_diff",
+        "comp7_rate_percent_diff",
+        "comp8_rate_percent_diff",
+    ]
+
+    # Loop to apply filtering to each competitor rate column
+    for col in comp_rate_cols:
+        # Cap unrealistic values but keep NaNs
+        df = df[(df[col].isna()) | (df[col] <= 50)]
+
+
+    # log transform orig_destination_distance
+    df["log_orig_destination_distance"] = np.log1p(df["orig_destination_distance"])
+
     # to do for training only
     if input_data == "training":
         # Create label for training set: 5 for booking, 1 for click, 0 for nothing
@@ -129,7 +150,7 @@ def filter_final_features(df: pd.DataFrame) -> pd.DataFrame:
         'visitor_hist_adr_usd_pct_rank', 'visitor_hist_adr_usd_minmax',
         'visitor_hist_adr_usd_zscore', 'visitor_hist_adr_usd_rank',
         'visitor_hist_starrating_pct_rank', 'visitor_hist_starrating_minmax',
-        'visitor_hist_starrating_zscore', 'visitor_hist_starrating_rank'
+        'visitor_hist_starrating_zscore', 'visitor_hist_starrating_rank', "log_orig_destination_distance"
     ]
     
     return df[[col for col in df.columns if col in allowed_columns]]
@@ -223,7 +244,7 @@ def split_and_test(df):
         objective="lambdarank",
         metric="ndcg",
         importance_type="gain",
-        n_estimators=300,
+        n_estimators=100,
         num_leaves=80,
         learning_rate=0.1,
         min_child_samples=10,
@@ -240,6 +261,7 @@ def split_and_test(df):
         eval_at=[5],
         eval_metric="ndcg",
         eval_names=["train", "val"],
+        callbacks=[lgb.early_stopping(20)]
     )
 
     # Plot NDCG@5 over rounds
@@ -282,7 +304,7 @@ def model_trainer(df):
         objective="lambdarank",
         metric="ndcg",
         importance_type="gain",
-        n_estimators=300,
+        n_estimators=50,
         num_leaves=80,
         learning_rate=0.1,
         min_child_samples=10,
@@ -384,64 +406,6 @@ def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFram
 
 
 
-
-def grid_search_lgbm_ranker(train_df, param_grid):
-    """
-    Performs a grid search on LGBMRanker hyperparameters.
-
-    Parameters:
-    - train_df: processed training DataFrame
-    - param_grid: dictionary with lists of hyperparameters to try
-
-    Returns:
-    - List of (params, final_val_ndcg) tuples sorted by NDCG
-    """
-    keys, values = zip(*param_grid.items())
-    all_combinations = [dict(zip(keys, v)) for v in product(*values)]
-    results = []
-
-    for i, params in enumerate(all_combinations, 1):
-        print(f"\n🚀 Testing combination {i}/{len(all_combinations)}: {params}")
-        
-        model = lgb.LGBMRanker(
-            objective="lambdarank",
-            metric="ndcg",
-            importance_type="gain",
-            **params
-        )
-
-        all_search_ids = train_df["srch_id"].unique()
-        train_ids, val_ids = train_test_split(all_search_ids, test_size=0.2, random_state=42)
-        train_set = train_df[train_df["srch_id"].isin(train_ids)]
-        val_set = train_df[train_df["srch_id"].isin(val_ids)]
-
-        group_train = train_set.groupby("srch_id").size().tolist()
-        group_val = val_set.groupby("srch_id").size().tolist()
-
-        X_train = train_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
-        y_train = train_set["label"]
-        X_val = val_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
-        y_val = val_set["label"]
-
-        model.fit(
-            X_train, y_train,
-            group=group_train,
-            eval_set=[(X_val, y_val)],
-            eval_group=[group_val],
-            eval_at=[5],
-            eval_metric="ndcg",
-            eval_names=["val"],
-        )
-
-        final_val_ndcg = model.evals_result_["val"]["ndcg@5"][-1]
-        print(f"✅ Final NDCG@5: {final_val_ndcg:.5f}")
-        results.append((params, final_val_ndcg))
-
-    results.sort(key=lambda x: x[1], reverse=True)
-    return results
-
-
-
 # for testing
 if __name__ == '__main__':
     train_df = data_clean("training")
@@ -452,6 +416,68 @@ if __name__ == '__main__':
     train_df = add_prop_id_statistics(train_df, top_medians, 'median')
     final_model = split_and_test(train_df)
     plot_feature_importance(final_model)
+
+
+
+
+
+
+#################### Hyperparameter tuning with grid search ####################    
+# def grid_search_lgbm_ranker(train_df, param_grid):
+#     """
+#     Performs a grid search on LGBMRanker hyperparameters.
+
+#     Parameters:
+#     - train_df: processed training DataFrame
+#     - param_grid: dictionary with lists of hyperparameters to try
+
+#     Returns:
+#     - List of (params, final_val_ndcg) tuples sorted by NDCG
+#     """
+#     keys, values = zip(*param_grid.items())
+#     all_combinations = [dict(zip(keys, v)) for v in product(*values)]
+#     results = []
+
+#     for i, params in enumerate(all_combinations, 1):
+#         print(f"\n🚀 Testing combination {i}/{len(all_combinations)}: {params}")
+        
+#         model = lgb.LGBMRanker(
+#             objective="lambdarank",
+#             metric="ndcg",
+#             importance_type="gain",
+#             **params
+#         )
+
+#         all_search_ids = train_df["srch_id"].unique()
+#         train_ids, val_ids = train_test_split(all_search_ids, test_size=0.2, random_state=42)
+#         train_set = train_df[train_df["srch_id"].isin(train_ids)]
+#         val_set = train_df[train_df["srch_id"].isin(val_ids)]
+
+#         group_train = train_set.groupby("srch_id").size().tolist()
+#         group_val = val_set.groupby("srch_id").size().tolist()
+
+#         X_train = train_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
+#         y_train = train_set["label"]
+#         X_val = val_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
+#         y_val = val_set["label"]
+
+#         model.fit(
+#             X_train, y_train,
+#             group=group_train,
+#             eval_set=[(X_val, y_val)],
+#             eval_group=[group_val],
+#             eval_at=[5],
+#             eval_metric="ndcg",
+#             eval_names=["val"],
+#         )
+
+#         final_val_ndcg = model.evals_result_["val"]["ndcg@5"][-1]
+#         print(f"✅ Final NDCG@5: {final_val_ndcg:.5f}")
+#         results.append((params, final_val_ndcg))
+
+#     results.sort(key=lambda x: x[1], reverse=True)
+#     return results
+
 
 
 
