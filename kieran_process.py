@@ -11,9 +11,10 @@ from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
 from sklearn.metrics import precision_score, recall_score, f1_score
 from sklearn.utils.class_weight import compute_sample_weight
+from itertools import product
 
 
-# clean input data
+############### clean input data ###############
 def data_clean(input_data):
     # Load the data
     df = pd.read_csv(f"data/{input_data}_set_VU_DM.csv")
@@ -38,6 +39,9 @@ def data_clean(input_data):
     return df
 
 
+
+
+##################### Adding features #####################
 # add found features to dataframe
 def add_found_features(df, feature_specs, group_key="srch_id"):
     """
@@ -56,7 +60,7 @@ def add_found_features(df, feature_specs, group_key="srch_id"):
     
     for base_feat, methods in feature_specs.items():
         if base_feat not in df.columns:
-            print(f"⚠️ Skipping '{base_feat}' (not in DataFrame)")
+            print(f"Skipping '{base_feat}' (not in DataFrame)")
             continue
         
         group = df.groupby(group_key)[base_feat]
@@ -79,11 +83,11 @@ def add_found_features(df, feature_specs, group_key="srch_id"):
             elif method == "rank":
                 df[new_col] = group.rank(method="min")
             else:
-                print(f"⚠️ Unknown method '{method}' for feature '{base_feat}'")
+                print(f"Unknown method '{method}' for feature '{base_feat}'")
 
     return df
 
-# found feature methods
+# found rank feature methods
 feature_methods = {
     "price_usd": ["pct_rank", "minmax", "zscore", "rank"],
     "prop_review_score": ["pct_rank", "zscore", "rank"],
@@ -131,12 +135,69 @@ def filter_final_features(df: pd.DataFrame) -> pd.DataFrame:
     return df[[col for col in df.columns if col in allowed_columns]]
 
 
+def add_prop_id_statistics(df, selected_features=None, stat_func='median'):
+    """
+    Adds per-prop_id aggregated statistics (mean, median, or std) of numeric features efficiently.
 
+    Parameters:
+    - df: pandas DataFrame
+    - stat_func: 'mean', 'median', or 'std' (default is 'mean')
+    - selected_features: List of features to compute stats on (default is all numeric except exclusions)
+    """
+    df = df.copy()
+
+    # Select numeric columns to aggregate
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    exclude_cols = ['srch_id', 'prop_id', 'position', 'click_bool', 'booking_bool', 'gross_bookings_usd', 'label']
+    numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
+
+    # Limit to selected features if provided
+    if selected_features:
+        numeric_cols = [col for col in numeric_cols if col in selected_features]
+
+    # Compute statistics per prop_id
+    prop_stats = df.groupby('prop_id')[numeric_cols].agg(stat_func)
+
+    # Rename columns to reflect the stat used
+    prop_stats.columns = [f"{col}_{stat_func}" for col in prop_stats.columns]
+
+    # Map each column back to df using prop_id lookup
+    for col in prop_stats.columns:
+        df[col] = df['prop_id'].map(prop_stats[col])
+
+    return df
+
+top_means = [
+    'price_usd', 'random_bool', 'prop_location_score2', 'srch_query_affinity_score',
+    'srch_length_of_stay', 'prop_log_historical_price', 'promotion_flag', 'comp5_rate',
+    'orig_destination_distance', 'srch_room_count', 'srch_booking_window',
+    'srch_saturday_night_bool', 'comp3_inv', 'srch_children_count', 'comp8_rate'
+]
+
+top_stds = [
+'price_usd', 'random_bool', 'prop_location_score2', 'srch_query_affinity_score',
+'comp8_inv', 'srch_room_count', 'prop_log_historical_price', 'promotion_flag',
+'srch_length_of_stay', 'visitor_location_country_id', 'comp3_rate_percent_diff',
+'comp8_rate', 'comp5_rate_percent_diff', 'comp8_rate_percent_diff', 'comp3_rate'
+]
+
+top_medians = [
+'price_usd', 'prop_log_historical_price', 'prop_location_score2',
+'srch_query_affinity_score', 'orig_destination_distance', 'srch_booking_window',
+'comp3_rate_percent_diff', 'comp5_rate_percent_diff', 'comp8_rate_percent_diff',
+'comp2_rate_percent_diff', 'visitor_hist_starrating', 'srch_length_of_stay',
+'visitor_hist_adr_usd', 'comp5_rate', 'promotion_flag'
+]
+
+
+
+
+######################## Training and Testing ########################
 # training model with own test data to find the best features
 def split_and_test(df):
     # Split into train/val
     all_search_ids = df["srch_id"].unique()
-    train_ids, val_ids = train_test_split(all_search_ids, test_size=0.1, random_state=42)
+    train_ids, val_ids = train_test_split(all_search_ids, test_size=0.2, random_state=42)
 
     train_df = df[df["srch_id"].isin(train_ids)].copy()
     val_df   = df[df["srch_id"].isin(val_ids)].copy()
@@ -180,7 +241,7 @@ def split_and_test(df):
         eval_names=["train", "val"],
     )
 
-    # ✅ Plot NDCG@5 over rounds
+    # Plot NDCG@5 over rounds
     evals_result = model.evals_result_
 
     plt.figure(figsize=(10, 5))
@@ -194,9 +255,13 @@ def split_and_test(df):
     plt.tight_layout()
     plt.show()
 
-    # ✅ Print final score
+    # Print final score
     final_val_score = evals_result["val"]["ndcg@5"][-1]
     print(f"Final NDCG@5 on validation set: {final_val_score:.5f}")
+
+    return model
+
+
 
 
 
@@ -216,10 +281,11 @@ def model_trainer(df):
         objective="lambdarank",
         metric="ndcg",
         importance_type="gain",
-        n_estimators=200,
-        num_leaves=50,
+        n_estimators=300,
+        num_leaves=80,
         learning_rate=0.1,
         min_child_samples=10,
+        lambda_l1=1.0,
         random_state=42
     )
 
@@ -232,6 +298,37 @@ def model_trainer(df):
     return model
 
 
+# ############# feature importance #############
+def plot_feature_importance(model, top_n=40):
+    """
+    Plots and prints the top_n most important features of a trained LGBMRanker model.
+
+    Parameters:
+    - model: Trained LGBMRanker model
+    - top_n: Number of top features to display (default 40)
+    """
+    importances = model.booster_.feature_importance(importance_type='gain')
+    feature_names = model.booster_.feature_name()
+
+    feat_imp = pd.DataFrame({
+        "feature": feature_names,
+        "importance": importances
+    }).sort_values(by="importance", ascending=False).head(top_n)
+
+    # Plot
+    plt.figure(figsize=(10, 6))
+    plt.barh(feat_imp["feature"], feat_imp["importance"], color="skyblue")
+    plt.xlabel("Feature importance (gain)")
+    plt.title(f"Top {top_n} Feature Importances")
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.show()
+
+    # Print as list
+    top_features_list = feat_imp["feature"].tolist()
+    print(f"📝 Top {top_n} Features:\n{top_features_list}")
+
+    return top_features_list
 
 
 # predict ranks of the test data
@@ -254,37 +351,106 @@ def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFram
 
 
 
-# run everything and export the submission file
-if __name__ == '__main__':
-    # Clean and prepare training data
-    train_df = data_clean("training")
-    train_df = add_found_features(train_df, feature_methods)
-    train_df = filter_final_features(train_df)
-
-    # Train model
-    model = model_trainer(train_df)
-
-    # Prepare and process test set
-    test_df = data_clean("test")
-    test_df = add_found_features(test_df, feature_methods)
-    test_df = filter_final_features(test_df)
-
-    # Get predictions
-    TEST_pred = get_predictions(model, test_df)
-    TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
-    print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
-
-
-
-
-
-# # for testing
+# ################ process and run model on test set for submission ################
 # if __name__ == '__main__':
+#     # Prepare and process training data
 #     train_df = data_clean("training")
 #     train_df = add_found_features(train_df, feature_methods)
 #     train_df = filter_final_features(train_df)
-#     split_and_test(train_df)
+#     train_df = add_prop_id_statistics(train_df, top_means, 'mean')
+#     train_df = add_prop_id_statistics(train_df, top_stds, 'std')
+#     train_df = add_prop_id_statistics(train_df, top_medians, 'median')
 
+#     # Train model
+#     model = model_trainer(train_df)
+
+#     # Plot feature importance
+#     plot_feature_importance(model)
+
+#     # Prepare and process test data
+#     test_df = data_clean("test")
+#     test_df = add_found_features(test_df, feature_methods)
+#     test_df = filter_final_features(test_df)
+#     test_df = add_prop_id_statistics(test_df, top_means, 'mean')
+#     test_df = add_prop_id_statistics(test_df, top_stds, 'std')
+#     test_df = add_prop_id_statistics(test_df, top_medians, 'median')
+
+#     # Get predictions
+#     TEST_pred = get_predictions(model, test_df)
+#     TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
+#     print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
+
+
+
+
+
+def grid_search_lgbm_ranker(train_df, param_grid):
+    """
+    Performs a grid search on LGBMRanker hyperparameters.
+
+    Parameters:
+    - train_df: processed training DataFrame
+    - param_grid: dictionary with lists of hyperparameters to try
+
+    Returns:
+    - List of (params, final_val_ndcg) tuples sorted by NDCG
+    """
+    keys, values = zip(*param_grid.items())
+    all_combinations = [dict(zip(keys, v)) for v in product(*values)]
+    results = []
+
+    for i, params in enumerate(all_combinations, 1):
+        print(f"\n🚀 Testing combination {i}/{len(all_combinations)}: {params}")
+        
+        model = lgb.LGBMRanker(
+            objective="lambdarank",
+            metric="ndcg",
+            importance_type="gain",
+            **params
+        )
+
+        all_search_ids = train_df["srch_id"].unique()
+        train_ids, val_ids = train_test_split(all_search_ids, test_size=0.2, random_state=42)
+        train_set = train_df[train_df["srch_id"].isin(train_ids)]
+        val_set = train_df[train_df["srch_id"].isin(val_ids)]
+
+        group_train = train_set.groupby("srch_id").size().tolist()
+        group_val = val_set.groupby("srch_id").size().tolist()
+
+        X_train = train_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
+        y_train = train_set["label"]
+        X_val = val_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
+        y_val = val_set["label"]
+
+        model.fit(
+            X_train, y_train,
+            group=group_train,
+            eval_set=[(X_val, y_val)],
+            eval_group=[group_val],
+            eval_at=[5],
+            eval_metric="ndcg",
+            eval_names=["val"],
+        )
+
+        final_val_ndcg = model.evals_result_["val"]["ndcg@5"][-1]
+        print(f"✅ Final NDCG@5: {final_val_ndcg:.5f}")
+        results.append((params, final_val_ndcg))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+
+
+# for testing
+if __name__ == '__main__':
+    train_df = data_clean("training")
+    train_df = add_found_features(train_df, feature_methods)
+    train_df = filter_final_features(train_df)
+    train_df = add_prop_id_statistics(train_df, top_means, 'mean')
+    train_df = add_prop_id_statistics(train_df, top_stds, 'std')
+    train_df = add_prop_id_statistics(train_df, top_medians, 'median')
+    final_model = split_and_test(train_df)
+    plot_feature_importance(final_model)
 
 
 
