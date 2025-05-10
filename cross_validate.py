@@ -15,9 +15,8 @@ from itertools import product
 
 
 ############### clean input data ###############
-def data_clean(df, input_data):
+def train_clean(df):
     # Load the data
-    df = pd.read_csv(f"data/{input_data}_set_VU_DM.csv")
 
     # Add relevant information from date-time, and remove the original date-time column
     df['date_time'] = pd.to_datetime(df['date_time'])
@@ -28,37 +27,55 @@ def data_clean(df, input_data):
     # log transform orig_destination_distance
     df["log_orig_destination_distance"] = np.log1p(df["orig_destination_distance"])
 
-    # to do for training only
-    if input_data == "training":
-        # Create label for training set: 5 for booking, 1 for click, 0 for nothing
-        df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
+    # Create label for training set: 5 for booking, 1 for click, 0 for nothing
+    df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
 
-        # Filter unrealistic gross_bookings_usd (only where it's not missing)
-        df = df[(df["gross_bookings_usd"].isna()) | ((df["gross_bookings_usd"] >= 10) & (df["gross_bookings_usd"] <= 2000))]
+    # Filter unrealistic gross_bookings_usd (only where it's not missing)
+    df = df[(df["gross_bookings_usd"].isna()) | ((df["gross_bookings_usd"] >= 10) & (df["gross_bookings_usd"] <= 2000))]
 
-        # Filter unrealistic prices (price_usd)
-        df = df[(df["price_usd"] >= 10) & (df["price_usd"] <= 1000)]
+    # Filter unrealistic prices (price_usd)
+    df = df[(df["price_usd"] >= 10) & (df["price_usd"] <= 1000)]
 
-        # List of competitor rate percent diff columns
-        comp_rate_cols = [
-            "comp1_rate_percent_diff",
-            "comp2_rate_percent_diff",
-            "comp3_rate_percent_diff",
-            "comp4_rate_percent_diff",
-            "comp5_rate_percent_diff",
-            "comp6_rate_percent_diff",
-            "comp7_rate_percent_diff",
-            "comp8_rate_percent_diff",
-        ]
+    # List of competitor rate percent diff columns
+    comp_rate_cols = [
+        "comp1_rate_percent_diff",
+        "comp2_rate_percent_diff",
+        "comp3_rate_percent_diff",
+        "comp4_rate_percent_diff",
+        "comp5_rate_percent_diff",
+        "comp6_rate_percent_diff",
+        "comp7_rate_percent_diff",
+        "comp8_rate_percent_diff",
+    ]
 
-        # Loop to apply filtering to each competitor rate column
-        for col in comp_rate_cols:
-            # Cap unrealistic values but keep NaNs
-            df = df[(df[col].isna()) | (df[col] <= 60)]
+    # Loop to apply filtering to each competitor rate column
+    for col in comp_rate_cols:
+        # Cap unrealistic values but keep NaNs
+            df = df[(df[col].isna()) | (df[col] <= 50)]
 
     return df
 
+############### clean input data ###############
+def val_clean(df):
 
+    # Add relevant information from date-time, and remove the original date-time column
+    df['date_time'] = pd.to_datetime(df['date_time'])
+    df['month'] = df['date_time'].dt.month
+    df['weekday'] = df['date_time'].dt.weekday
+    df.drop(columns=['date_time'], inplace=True)
+
+    # log transform orig_destination_distance
+    df["log_orig_destination_distance"] = np.log1p(df["orig_destination_distance"])
+
+    # df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
+
+    # # Filter unrealistic gross_bookings_usd (only where it's not missing)
+    # df = df[(df["gross_bookings_usd"].isna()) | ((df["gross_bookings_usd"] >= 10) & (df["gross_bookings_usd"] <= 2000))]
+
+    # Filter unrealistic prices (price_usd)
+    df = df[(df["price_usd"] >= 10) & (df["price_usd"] <= 1000)]
+
+    return df
 
 
 ##################### Adding features #####################
@@ -220,7 +237,10 @@ top_medians = [
 
 ######################## Training and Testing ########################
 # training model with own test data to find the best features
-def split_and_test(df):
+def split_and_test():
+    # import data
+    df = pd.read_csv(f"data/training_set_VU_DM.csv")
+
     # Split into train/val
     all_search_ids = df["srch_id"].unique()
     train_ids, val_ids = train_test_split(all_search_ids, test_size=0.2, random_state=42)
@@ -229,6 +249,24 @@ def split_and_test(df):
     val_df   = df[df["srch_id"].isin(val_ids)].copy()
     train_df = train_df.sort_values(by="srch_id")
     val_df   = val_df.sort_values(by="srch_id")
+
+    # clean datasets differently
+    train_df = train_clean(train_df)
+    val_df   = val_clean(val_df)
+
+    # add features
+    train_df = add_found_features(train_df, feature_methods)
+    val_df = add_found_features(val_df, feature_methods)
+
+    train_df = filter_final_features(train_df)              
+    train_df = add_prop_id_statistics(train_df, top_means, 'mean') 
+    train_df = add_prop_id_statistics(train_df, top_stds, 'std')
+    train_df = add_prop_id_statistics(train_df, top_medians, 'median')
+
+    val_df = filter_final_features(val_df)              
+    val_df = add_prop_id_statistics(val_df, top_means, 'mean') 
+    val_df = add_prop_id_statistics(val_df, top_stds, 'std')
+    val_df = add_prop_id_statistics(val_df, top_medians, 'median')
 
     # Create group sizes
     group_sizes_train = train_df.groupby("srch_id").size().tolist()
@@ -249,12 +287,10 @@ def split_and_test(df):
         objective="lambdarank",
         metric="ndcg",
         importance_type="gain",
-        n_estimators=100,
+        n_estimators=125,
         num_leaves=80,
         learning_rate=0.1,
         min_child_samples=10,
-        lambda_l1=1.0,
-        lambda_l2=2.0,
         random_state=42,
         n_jobs=-1
     )
@@ -310,12 +346,10 @@ def model_trainer(df):
         objective="lambdarank",
         metric="ndcg",
         importance_type="gain",
-        n_estimators=150,
-        num_leaves=80,
+        n_estimators=200,
+        num_leaves=100,
         learning_rate=0.1,
         min_child_samples=10,
-        lambda_l1=1.0,
-        lambda_l2=2.0,
         random_state=42
     )
 
@@ -381,48 +415,44 @@ def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFram
 
 
 
-# ################ process and run model on test set for submission ################
-# if __name__ == '__main__':
-#     # Prepare and process training data
-#     train_df = data_clean("training")
-#     train_df = add_found_features(train_df, feature_methods)
-#     train_df = filter_final_features(train_df)
-#     train_df = add_prop_id_statistics(train_df, top_means, 'mean')
-#     train_df = add_prop_id_statistics(train_df, top_stds, 'std')
-#     train_df = add_prop_id_statistics(train_df, top_medians, 'median')
-
-#     # Train model
-#     model = model_trainer(train_df)
-
-#     # Plot feature importance
-#     plot_feature_importance(model)
-
-#     # Prepare and process test data
-#     test_df = data_clean("test")
-#     test_df = add_found_features(test_df, feature_methods)
-#     test_df = filter_final_features(test_df)
-#     test_df = add_prop_id_statistics(test_df, top_means, 'mean')
-#     test_df = add_prop_id_statistics(test_df, top_stds, 'std')
-#     test_df = add_prop_id_statistics(test_df, top_medians, 'median')
-
-#     # Get predictions
-#     TEST_pred = get_predictions(model, test_df)
-#     TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
-#     print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
-
-
-
-
-# for testing
+################ process and run model on test set for submission ################
 if __name__ == '__main__':
-    train_df = data_clean("training")
+    # Prepare and process training data
+    train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
+    train_df = train_clean(train_df)
     train_df = add_found_features(train_df, feature_methods)
-    train_df = filter_final_features(train_df)              # 69 after filtering
-    train_df = add_prop_id_statistics(train_df, top_means, 'mean') 
+    train_df = filter_final_features(train_df)
+    train_df = add_prop_id_statistics(train_df, top_means, 'mean')
     train_df = add_prop_id_statistics(train_df, top_stds, 'std')
     train_df = add_prop_id_statistics(train_df, top_medians, 'median')
-    final_model = split_and_test(train_df)
-    plot_feature_importance(final_model)
+
+    # Train model
+    model = model_trainer(train_df)
+
+    # Plot feature importance
+    plot_feature_importance(model)
+
+    # Prepare and process test data
+    test_df = pd.read_csv(f"data/test_set_VU_DM.csv")
+    test_df = val_clean(test_df)
+    test_df = add_found_features(test_df, feature_methods)
+    test_df = filter_final_features(test_df)
+    test_df = add_prop_id_statistics(test_df, top_means, 'mean')
+    test_df = add_prop_id_statistics(test_df, top_stds, 'std')
+    test_df = add_prop_id_statistics(test_df, top_medians, 'median')
+
+    # Get predictions
+    TEST_pred = get_predictions(model, test_df)
+    TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
+    print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
+
+
+
+
+# # for testing
+# if __name__ == '__main__':
+#     final_model = split_and_test()
+#     plot_feature_importance(final_model)
 
 
 
