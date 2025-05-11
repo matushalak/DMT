@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,6 +10,7 @@ from sklearn.metrics import ndcg_score
 import optuna
 from typing import List, Dict, Tuple, Union, Optional
 import logging
+
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
@@ -71,6 +73,9 @@ class Modeler:
             "random_state": 42,
             "n_jobs": -1
         }
+        # Create plots directory if it doesn't exist
+        os.makedirs("plots", exist_ok=True)
+        logger.info("Initialized Modeler (plots directory created if it didn't exist)")
 
         # Target columns that should be excluded from features
         self.target_cols = ['srch_id', 'prop_id', 'position', 'click_bool', 'booking_bool',
@@ -100,7 +105,7 @@ class Modeler:
         self.val_df = val_df.copy()
         logger.info("Set new validation dataframe for modeling")
 
-    def train_model(self, eval_at: List[int] = [5], target_col: str = 'label') -> lgb.LGBMRanker:
+    def train_model(self, eval_at: List[int] = [5], target_col: str = 'target') -> lgb.LGBMRanker:
         """
         Train a LightGBM ranker model with separate training and validation sets.
 
@@ -146,6 +151,7 @@ class Modeler:
         # Initialize and train model
         model = lgb.LGBMRanker(**self.model_params)
 
+
         model.fit(
             X=train_x,
             y=train_y,
@@ -155,7 +161,6 @@ class Modeler:
             eval_at=eval_at,
             eval_metric="ndcg",
             eval_names=["train", "val"],
-            verbose=True
         )
 
         # Store model and evaluation results
@@ -168,7 +173,7 @@ class Modeler:
 
         return model
 
-    def train_full_model(self, full_df: pd.DataFrame = None, target_col: str = 'label') -> lgb.LGBMRanker:
+    def train_full_model(self, full_df: pd.DataFrame = None, target_col: str = 'target') -> lgb.LGBMRanker:
         """
         Train a LightGBM ranker model on the full dataset (training + validation).
 
@@ -236,6 +241,10 @@ class Modeler:
         if self.evals_result is None:
             raise ValueError("No evaluation results available. Train a model with validation first.")
 
+        # Create plots directory if it doesn't exist
+        os.makedirs("plots", exist_ok=True)
+
+        # Create figure and plot
         plt.figure(figsize=figsize)
         plt.plot(self.evals_result["train"][f"ndcg@{eval_at}"], label=f"Train NDCG@{eval_at}")
         plt.plot(self.evals_result["val"][f"ndcg@{eval_at}"], label=f"Validation NDCG@{eval_at}")
@@ -245,7 +254,17 @@ class Modeler:
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
+
+        # Save the figure first
+        save_path = f"plots/ndcg@{eval_at}_over_boosting_rounds.png"
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved training metrics plot to {save_path}")
+
+        # Then display the figure
         plt.show()
+
+        # Close the figure to free memory
+        plt.close()
 
         logger.info("Plotted training and validation NDCG scores")
 
@@ -286,14 +305,26 @@ class Modeler:
 
         # Plot if requested
         if plot:
+            # Create plots directory if it doesn't exist
+            os.makedirs("plots", exist_ok=True)
+
             plt.figure(figsize=figsize)
             plt.barh(feat_imp["feature"], feat_imp["importance"], color="skyblue")
             plt.xlabel("Feature importance (gain)")
             plt.title(f"Top {top_n} Feature Importances")
             plt.gca().invert_yaxis()
             plt.tight_layout()
+
+            # Save the figure first
+            save_path = f"plots/top_{top_n}_feature_importances.png"
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            logger.info(f"Saved feature importance plot to {save_path}")
+
+            # Then display the figure
             plt.show()
-            plt.savefig(f"plots/feature_importance_top_{top_n}.png")
+
+            # Close the figure to free memory
+            plt.close()
 
         # Get list of top features
         top_features_list = feat_imp["feature"].tolist()
@@ -386,7 +417,8 @@ class Modeler:
 
         return ranked
 
-    def hyperparameter_tuning(self, n_trials: int = 20, target_col: str = 'label') -> Dict:
+    def hyperparameter_tuning(self, n_trials: int = 20, target_col: str = 'target', 
+                             visualize: bool = True, dashboard: bool = False) -> Dict:
         """
         Tune hyperparameters using Optuna with separate training and validation sets.
 
@@ -396,6 +428,10 @@ class Modeler:
             Number of Optuna trials
         target_col : str, optional
             Column name for the target variable
+        visualize : bool, optional
+            Whether to create visualization plots
+        dashboard : bool, optional
+            Whether to launch Optuna Dashboard
 
         Returns:
         --------
@@ -427,6 +463,32 @@ class Modeler:
         train_y = train_df[target_col]
         val_y = val_df[target_col]
 
+        # Create study with a SQLite storage for persistence
+        storage_name = "sqlite:///optuna_study.db"
+        study = optuna.create_study(direction="maximize", study_name="lgbm_ranker_tuning", 
+                                   storage=storage_name, load_if_exists=True)
+        
+        # Launch Optuna Dashboard in a separate process if requested
+        dashboard_process = None
+        if dashboard:
+            try:
+                import subprocess
+                import sys
+                import time
+                
+                logger.info("Launching Optuna Dashboard. Access it at http://127.0.0.1:8080")
+                dashboard_process = subprocess.Popen(
+                    [sys.executable, "-m", "optuna", "dashboard", "--storage", storage_name],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                # Give the dashboard a moment to start
+                time.sleep(2)
+                
+            except Exception as e:
+                logger.warning(f"Failed to launch Optuna Dashboard: {e}")
+                dashboard_process = None
+
         def objective(trial):
             # Define hyperparameters to tune
             param = {
@@ -446,6 +508,9 @@ class Modeler:
             # Initialize and train model
             model = lgb.LGBMRanker(**param)
 
+            # Create early stopping callback
+            early_stopping_callback = lgb.early_stopping(50, verbose=False)
+
             model.fit(
                 X=train_x,
                 y=train_y,
@@ -454,32 +519,79 @@ class Modeler:
                 eval_group=[group_sizes_val],
                 eval_at=[5],
                 eval_metric="ndcg",
-                early_stopping_rounds=50,
-                verbose=False
-            )
+                callbacks=[early_stopping_callback]
+                    )
 
             # Return validation NDCG score
             return model.best_score_['valid_0']['ndcg@5']
 
-        # Create and run Optuna study
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=n_trials)
+        try:
+            # Run optimization
+            study.optimize(objective, n_trials=n_trials)
+            
+            # Get best parameters
+            best_params = study.best_params
+            best_score = study.best_value
 
-        # Get best parameters
-        best_params = study.best_params
-        best_score = study.best_value
+            logger.info(f"Best NDCG@5: {best_score:.5f}")
+            logger.info(f"Best parameters: {best_params}")
 
-        logger.info(f"Best NDCG@5: {best_score:.5f}")
-        logger.info(f"Best parameters: {best_params}")
+            # Update model parameters
+            tuned_params = self.model_params.copy()
+            tuned_params.update(best_params)
+            self.model_params = tuned_params
 
-        # Update model parameters
-        tuned_params = self.model_params.copy()
-        tuned_params.update(best_params)
-        self.model_params = tuned_params
+            # Create visualization plots
+            if visualize and len(study.trials) > 1:  # Only create plots if we have multiple trials
+                try:
+                    import matplotlib.pyplot as plt
+                    
+                    # Create plots directory if it doesn't exist
+                    os.makedirs("plots/optuna", exist_ok=True)
+                    
+                    # Plot optimization history
+                    fig = optuna.visualization.matplotlib.plot_optimization_history(study)
+                    if fig:
+                        plt.figure(fig.figure)
+                        plt.tight_layout()
+                        plt.savefig("plots/optuna/optimization_history.png", dpi=300)
+                        plt.close()
+                    
+                    # Plot parameter importances (requires at least 2 completed trials)
+                    if len(study.trials) >= 2:
+                        fig = optuna.visualization.matplotlib.plot_param_importances(study)
+                        if fig:
+                            plt.figure(fig.figure)
+                            plt.tight_layout()
+                            plt.savefig("plots/optuna/param_importances.png", dpi=300)
+                            plt.close()
+                    
+                    # Plot parallel coordinate (requires at least 2 completed trials)
+                    if len(study.trials) >= 2:
+                        fig = optuna.visualization.matplotlib.plot_parallel_coordinate(study)
+                        if fig:
+                            plt.figure(fig.figure)
+                            plt.tight_layout()
+                            plt.savefig("plots/optuna/parallel_coordinate.png", dpi=300)
+                            plt.close()
+                    
+                    logger.info("Saved Optuna visualization plots to plots/optuna/")
+                except Exception as e:
+                    logger.warning(f"Failed to create visualization plots: {e}")
+                    import traceback
+                    logger.warning(traceback.format_exc())
+            
+            return best_params
+        
+        finally:
+            # Clean up dashboard process if it was started
+            if dashboard_process is not None:
+                logger.info("Stopping Optuna Dashboard...")
+                dashboard_process.terminate()
+                dashboard_process.wait()
+                logger.info("Optuna Dashboard stopped.")
 
-        return best_params
-
-    def calculate_ndcg(self, test_df: pd.DataFrame, k: int = 5, target_col: str = 'label') -> float:
+    def calculate_ndcg(self, test_df: pd.DataFrame, k: int = 5, target_col: str = 'target') -> float:
         """
         Calculate NDCG score for predictions.
 
@@ -613,3 +725,102 @@ class Modeler:
             return ranked
 
         return None
+
+    def plot_learning_curve(self, n_estimators_list: List[int] = None,
+                           target_col: str = 'target', figsize: Tuple[int, int] = (10, 6)) -> None:
+        """
+        Plot learning curve showing model performance with different numbers of estimators.
+
+        Parameters:
+        -----------
+        n_estimators_list : List[int], optional
+            List of n_estimators values to try (default: [10, 50, 100, 200, 300])
+        target_col : str, optional
+            Column name for the target variable
+        figsize : Tuple[int, int], optional
+            Figure size for the plot
+        """
+        if self.train_df is None or self.val_df is None:
+            raise ValueError("Both training and validation dataframes are required.")
+
+        # Default n_estimators values if not provided
+        if n_estimators_list is None:
+            n_estimators_list = [10, 50, 100, 200, 300]
+
+        # Create plots directory if it doesn't exist
+        os.makedirs("plots", exist_ok=True)
+
+        # Sort by search ID for consistency
+        train_df = self.train_df.sort_values(by="srch_id")
+        val_df = self.val_df.sort_values(by="srch_id")
+
+        # Create group sizes
+        group_sizes_train = train_df.groupby("srch_id").size().tolist()
+        group_sizes_val = val_df.groupby("srch_id").size().tolist()
+
+        # Drop target columns for features
+        to_drop = [col for col in self.target_cols if col in train_df.columns]
+
+        # Prepare train/val sets
+        train_x = train_df.drop(columns=to_drop)
+        val_x = val_df.drop(columns=to_drop)
+        train_y = train_df[target_col]
+        val_y = val_df[target_col]
+
+        # Lists to store results
+        train_scores = []
+        val_scores = []
+
+        # Train models with different n_estimators
+        for n_est in n_estimators_list:
+            logger.info(f"Training model with {n_est} estimators")
+
+            # Update model parameters
+            params = self.model_params.copy()
+            params['n_estimators'] = n_est
+
+            # Initialize and train model
+            model = lgb.LGBMRanker(**params)
+
+            model.fit(
+                X=train_x,
+                y=train_y,
+                group=group_sizes_train,
+                eval_set=[(train_x, train_y), (val_x, val_y)],
+                eval_group=[group_sizes_train, group_sizes_val],
+                eval_at=[5],
+                eval_metric="ndcg",
+                eval_names=["train", "val"],
+                verbose=False
+            )
+
+            # Get final scores
+            train_score = model.evals_result_["train"]["ndcg@5"][-1]
+            val_score = model.evals_result_["val"]["ndcg@5"][-1]
+
+            train_scores.append(train_score)
+            val_scores.append(val_score)
+
+            logger.info(f"n_estimators={n_est}, Train NDCG@5={train_score:.5f}, Val NDCG@5={val_score:.5f}")
+
+        # Plot learning curve
+        plt.figure(figsize=figsize)
+        plt.plot(n_estimators_list, train_scores, 'o-', label='Training NDCG@5')
+        plt.plot(n_estimators_list, val_scores, 'o-', label='Validation NDCG@5')
+        plt.xlabel('Number of Estimators')
+        plt.ylabel('NDCG@5')
+        plt.title('Learning Curve: NDCG@5 vs Number of Estimators')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+
+        # Save the figure
+        save_path = "plots/learning_curve.png"
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved learning curve plot to {save_path}")
+
+        # Display the figure
+        plt.show()
+
+        # Close the figure to free memory
+        plt.close()

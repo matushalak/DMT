@@ -5,6 +5,16 @@ from sklearn.linear_model import LinearRegression
 import logging
 import os
 
+from boruta import BorutaPy
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+
+# restore the deprecated aliases
+np.int = int
+np.bool = bool
+np.float = float
+
+
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
 
@@ -43,6 +53,7 @@ class Preprocessor:
             The dataframe to preprocess
         """
         self.df = df.copy() if df is not None else None
+        self.encoder = None
 
         self.target_cols = ['position', 'click_bool', 'booking_bool',
                         'gross_bookings_usd', 'target']
@@ -106,7 +117,7 @@ class Preprocessor:
                 self.df[col] = self.df[col].replace(0, np.nan)
                 logger.info(f"Recoded 0 to NA in {col}")
 
-    def clean_data(self, is_test: bool = False) -> pd.DataFrame:
+    def clean_data(self, is_test: bool = False, name: str = "train") -> pd.DataFrame:
         """
         Clean the input data.
 
@@ -133,10 +144,12 @@ class Preprocessor:
         self._recode_zero_to_nan(cols=["prop_review_score", "prop_starrating"])
 
         if is_test == False:
-            self._create_training_target()
             self._filter_gross_bookings()
             self._filter_unrealistic_prices()
             self._filter_competitor_rates()
+        if name != "test": # also for val
+            self._create_training_target()
+
 
         return self.df
 
@@ -183,8 +196,14 @@ class Preprocessor:
         # Impute with mean
         if mean_imp:
             for col in mean_imp:
-                if col in df.columns:
+                # if "prop" is in name, first try imputing filtered on prop_id
+                if "prop" in col:
+                    df[col] = df.groupby("prop_id")[col].transform(lambda x: x.fillna(x.mean()))
+                    logger.info(f"Imputed {col} with mean per prop_id")
+                else:
                     df[col] = df[col].fillna(df[col].mean())
+                    logger.info(f"Imputed {col} with global mean")
+
 
         # Impute with mode
         if mode_imp:
@@ -381,7 +400,7 @@ class Preprocessor:
         self.df = df
         return df
 
-    def add_prop_id_statistics(self, selected_features: List[str] = None,
+    def add_statistics_per_group(self, selected_features: List[str] = None,
                               stat_func: str = 'median',
                               with_respect_to: str = "prop_id") -> pd.DataFrame:
         """
@@ -424,6 +443,8 @@ class Preprocessor:
         # Map each column back to df using prop_id lookup
         for col in prop_stats.columns:
             df[col] = df[with_respect_to].map(prop_stats[col])
+        
+        logger.info(f"Added {stat_func} statistics for {with_respect_to} to {len(prop_stats.columns)} columns")
 
         self.df = df
         return df
@@ -593,6 +614,147 @@ class Preprocessor:
         self.df = df
         return df
 
+    def filter_features_based_on_importance(self, feature_importances: List[str], top_n: int = 40, min_importance: float = 0.005) -> pd.DataFrame:
+        """
+        Filter features based on their importance.
+        """
+
+        if self.df is None:
+            raise ValueError("No dataframe to filter. Please set a dataframe first.")
+        
+        if feature_importances is None:
+            raise ValueError("No feature importances provided. Please provide feature importances.")
+        
+        # Filter features based on top_n featres
+        top_features = feature_importances[:top_n]
+        self.df = self.df[top_features]
+        logger.info(f"Filtered features based on top {top_n} features")
+        return self.df
+
+    def remove_highly_correlated_features(self, threshold: float = 0.95) -> pd.DataFrame:
+        """
+        Remove features that are highly correlated with any other feature,
+        but only drop one from each correlated pair: the one with higher
+        average absolute correlation to all other features.
+        """
+        if self.df is None:
+            raise ValueError("No dataframe to filter. Please set a dataframe first.")
+        
+        # Select only numeric features (exclude targets)
+        df_num = self.df.select_dtypes(include=[np.number]).copy()
+        df_num = df_num.drop(columns=[c for c in self.target_cols if c in df_num], errors='ignore')
+        
+        # Compute correlation matrix and absolute values
+        corr = df_num.corr().abs()
+        # Create mask for upper triangle
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        
+        # Find all pairs exceeding threshold
+        to_drop = set()
+        for col in upper.columns:
+            correlated = upper.index[upper[col] > threshold].tolist()
+            for other in correlated:
+                # compare avg abs-correlation
+                mean_col = corr[col].mean()
+                mean_other = corr[other].mean()
+                # mark whichever has the higher mean correlation
+                to_drop.add(col if mean_col > mean_other else other)
+        
+        # Drop them once
+        if to_drop:
+            self.df.drop(columns=list(to_drop), inplace=True)
+            logger.info(f"Dropped {len(to_drop)} highly correlated features: {sorted(to_drop)}")
+        else:
+            logger.info("No highly correlated features found")
+        
+        return self.df
+
+    def boruta_feature_selection(self,
+                                 X: pd.DataFrame,
+                                 y: Union[pd.Series, np.ndarray],
+                                 max_iter: int = 100,
+                                 random_state: int = 42,
+                                 impute_strategy: str = 'median',
+                                 clip_inf: bool = True,
+                                 inf_replace_value: Optional[float] = None
+                                 ) -> List[str]:
+        """
+        Run Boruta feature selection (requires no NaNs or infinities in X).
+        Automatically replaces infinities, clips extremes, and imputes.
+
+        Parameters:
+        -----------
+        X : DataFrame
+            Feature matrix (numeric only).
+        y : array-like
+            Target values.
+        max_iter : int
+            Maximum Boruta iterations.
+        random_state : int
+            Seed for reproducibility.
+        impute_strategy : str
+            'mean', 'median', 'most_frequent', or 'constant'.
+        clip_inf : bool
+            If True, turn ±inf into NaN before imputation.
+        inf_replace_value : float, optional
+            If not None, replace ±inf with this instead of NaN.
+
+        Returns:
+        --------
+        List[str]
+            List of features confirmed as important.
+        """
+        if X.isnull().all(axis=1).any():
+            logger.warning("Some rows are entirely NaN—consider dropping them first.")
+
+        # 1) Replace infinities
+        if clip_inf:
+            if inf_replace_value is None:
+                X_clean = X.replace([np.inf, -np.inf], np.nan)
+                logger.info("Replaced ±inf with NaN")
+            else:
+                X_clean = X.replace([np.inf, -np.inf], inf_replace_value)
+                logger.info(f"Replaced ±inf with {inf_replace_value}")
+        else:
+            X_clean = X.copy()
+
+        # 2) (Optional) clip extremely large values
+        #    e.g. clip to some percentile, if you know your domain
+        #    Uncomment if needed:
+        #   for col in X_clean.columns:
+        #       upper = X_clean[col].quantile(0.999)
+        #       lower = X_clean[col].quantile(0.001)
+        #       X_clean[col] = X_clean[col].clip(lower, upper)
+
+        # 3) Impute missing values
+        imputer = SimpleImputer(strategy=impute_strategy)
+        X_imp = pd.DataFrame(
+            imputer.fit_transform(X_clean),
+            columns=X_clean.columns,
+            index=X_clean.index
+        )
+        logger.info(f"Imputed missing values using strategy='{impute_strategy}'")
+
+        # 4) Run Boruta
+        rf = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=None,
+            random_state=random_state,
+            n_jobs=-1
+        )
+        boruta = BorutaPy(
+            estimator=rf,
+            n_estimators='auto',
+            max_iter=max_iter,
+            random_state=random_state,
+            verbose=2
+        )
+        boruta.fit(X_imp.values, y)
+
+        confirmed = X.columns[boruta.support_].tolist()
+        logger.info(f"Boruta confirmed {len(confirmed)} features: {confirmed}")
+        return confirmed
+
 
     def run_pipeline(self, is_test: bool = False, encoder: Dict = None, save: bool = False, name: str = "train") -> pd.DataFrame:
         """
@@ -617,13 +779,13 @@ class Preprocessor:
         logger.info(f"Running preprocessing pipeline for {name}")
 
         # Clean data
-        self.clean_data(is_test=is_test)
+        self.clean_data(is_test=is_test, name=name)
 
 
         # Impute data
         self.impute_data(
                     sum_imp=None,
-                    mean_imp=None,
+                    mean_imp=["prop_review_score", "prop_starrating"],
                     mode_imp=None,
                     interp_imp=None,
                     regression_imputation=[["prop_location_score1", "prop_review_score"]]
@@ -656,6 +818,9 @@ class Preprocessor:
             "visitor_hist_adr_usd": ["pct_rank", "minmax", "zscore", "rank"],
             "visitor_hist_starrating": ["pct_rank", "minmax", "zscore", "rank"],
         }
+        # add all feature methods to all columns
+        # feature_methods = {col: ["pct_rank", "minmax", "zscore", "rank"] for col in self.df.columns}
+
         self.add_relative_features(feature_methods)
 
 
@@ -688,13 +853,61 @@ class Preprocessor:
             'visitor_hist_adr_usd', 'comp5_rate', 'promotion_flag'
         ]
 
-        self.add_prop_id_statistics(top_means,
+        # Add property ID statistics to all columns
+        all_cols = self.df[self.df.select_dtypes(include=[np.number])].columns.tolist()
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='median',
+        #                             with_respect_to="prop_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='mean',
+        #                             with_respect_to="prop_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='std',
+        #                             with_respect_to="prop_id")
+        # self.add_statistics_per_group(top_means,
+        #                             stat_func='median',
+        #                             with_respect_to="srch_destination_id")
+        # self.add_statistics_per_group(top_stds,
+        #                             stat_func='mean',
+        #                             with_respect_to="srch_destination_id")
+        # self.add_statistics_per_group(top_medians,
+        #                             stat_func='std',
+        #                             with_respect_to="srch_destination_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='median',
+        #                             with_respect_to="site_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='mean',
+        #                             with_respect_to="site_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='std',
+        #                             with_respect_to="site_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='median',
+        #                             with_respect_to="visitor_location_country_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='mean',
+        #                             with_respect_to="visitor_location_country_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='std',
+        #                             with_respect_to="visitor_location_country_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='median',
+        #                             with_respect_to="prop_country_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='mean',
+        #                             with_respect_to="prop_country_id")
+        # self.add_statistics_per_group(all_cols,
+        #                             stat_func='std',
+        #                             with_respect_to="prop_country_id")
+
+        self.add_statistics_per_group(top_means,
                                     stat_func='median',
                                     with_respect_to="prop_id")
-        self.add_prop_id_statistics(top_stds,
+        self.add_statistics_per_group(top_stds,
                                     stat_func='mean',
                                     with_respect_to="prop_id")
-        self.add_prop_id_statistics(top_medians,
+        self.add_statistics_per_group(top_medians,
                                     stat_func='std',
                                     with_respect_to="prop_id")
         #TODO do with respect to srch_destination_id, site_id ....
@@ -719,16 +932,25 @@ class Preprocessor:
             "srch_destination_id",
         ]
 
+        # one-hot encode:
+        one_hot_encode_cols = ["month", "weekday", "vacation_day_of_week"]
+
         self.encode(
                     prob_encode_cols=[],
-                    one_hot_encode_cols=low_cardinality_cols,
+                    one_hot_encode_cols=one_hot_encode_cols,
                     freq_encode_cols=categorical_columns,
                     is_test=is_test,
-                    encoder=encoder # for probability encoding
+                    encoder=encoder  # for probability encoding
                     )
 
-        # Filter features
-        # self.filter_features()
+
+        # remove highly correlated features
+        self.remove_highly_correlated_features(threshold=0.90)
+
+        # remove non-numeric columns
+        self.df = self.df.select_dtypes(include=[np.number]) # date_time and vacation_date are not needed anymore
+
+
 
         if save:
             self.df.to_csv(f"data/processed_{name}.csv", index=False)
@@ -736,7 +958,7 @@ class Preprocessor:
 
 
         # Return the preprocessed dataframe and encoder if available
-        if not is_test and hasattr(self, 'encoder'):
+        if not is_test:
             return self.df, self.encoder
         else:
             return self.df
