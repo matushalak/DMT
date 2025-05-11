@@ -95,11 +95,18 @@ def select_important_features(save_processed_data: bool = False):
     preprocessor = Preprocessor()
     preprocessor.set_dataframe(processed_df)
     # Boruta feature selection
-    X = processed_df.drop(columns=preprocessor.target_cols)
-    y = processed_df["target"]
-    confirmed_features = preprocessor.boruta_feature_selection(X, y)
-    print(f"Confirmed features: {confirmed_features}")
+    # Suppose df_proc has 'srch_id', 'prop_id', 'target' + your features
+    to_drop = preprocessor.target_cols + ['srch_id']
+    X = processed_df.drop(columns=to_drop)
+    y = processed_df['target'].values
 
+    # Build group sizes in order
+    group_sizes = processed_df.groupby("srch_id").size().tolist()
+
+    confirmed_feats = preprocessor.boruta_feature_selection_xgbranker(
+        X, y, group=group_sizes, max_iter=50
+    )
+    print(f"Confirmed features: {confirmed_feats}")
 
 
 

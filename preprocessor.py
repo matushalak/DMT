@@ -6,8 +6,8 @@ import logging
 import os
 
 from boruta import BorutaPy
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
+from xgboost import XGBRanker
 
 # restore the deprecated aliases
 np.int = int
@@ -669,64 +669,54 @@ class Preprocessor:
         
         return self.df
 
-    def boruta_feature_selection(self,
-                                 X: pd.DataFrame,
-                                 y: Union[pd.Series, np.ndarray],
-                                 max_iter: int = 100,
-                                 random_state: int = 42,
-                                 impute_strategy: str = 'median',
-                                 clip_inf: bool = True,
-                                 inf_replace_value: Optional[float] = None
-                                 ) -> List[str]:
+
+    def boruta_feature_selection_xgbranker(self,
+                                           X: pd.DataFrame,
+                                           y: Union[pd.Series, np.ndarray],
+                                           group: List[int],
+                                           max_iter: int = 100,
+                                           random_state: int = 42,
+                                           impute_strategy: str = 'median',
+                                           clip_inf: bool = True,
+                                           inf_replace_value: Optional[float] = None
+                                           ) -> List[str]:
         """
-        Run Boruta feature selection (requires no NaNs or infinities in X).
-        Automatically replaces infinities, clips extremes, and imputes.
+        Run Boruta feature selection using XGBRanker (with NDCG@5) 
+        as the internal estimator. Requires a group-size list.
 
         Parameters:
         -----------
         X : DataFrame
-            Feature matrix (numeric only).
+            Numeric feature matrix.
         y : array-like
-            Target values.
+            Target relevance scores.
+        group : list of int
+            Group sizes (number of rows per query) in the same order as X, y.
         max_iter : int
-            Maximum Boruta iterations.
+            Boruta max iterations.
         random_state : int
             Seed for reproducibility.
         impute_strategy : str
-            'mean', 'median', 'most_frequent', or 'constant'.
+            SimpleImputer strategy: 'mean', 'median', etc.
         clip_inf : bool
-            If True, turn ±inf into NaN before imputation.
-        inf_replace_value : float, optional
-            If not None, replace ±inf with this instead of NaN.
+            Convert ±inf to NaN before imputation.
+        inf_replace_value : float|None
+            If not None, use this value in place of ±inf.
 
         Returns:
         --------
-        List[str]
-            List of features confirmed as important.
+        confirmed : List[str]
+            List of features confirmed important by Boruta.
         """
-        if X.isnull().all(axis=1).any():
-            logger.warning("Some rows are entirely NaN—consider dropping them first.")
-
         # 1) Replace infinities
         if clip_inf:
-            if inf_replace_value is None:
-                X_clean = X.replace([np.inf, -np.inf], np.nan)
-                logger.info("Replaced ±inf with NaN")
-            else:
-                X_clean = X.replace([np.inf, -np.inf], inf_replace_value)
-                logger.info(f"Replaced ±inf with {inf_replace_value}")
+            X_clean = X.replace([np.inf, -np.inf], 
+                                 inf_replace_value if inf_replace_value is not None else np.nan)
+            logger.info(f"Replaced ±inf with {inf_replace_value or 'NaN'}")
         else:
             X_clean = X.copy()
 
-        # 2) (Optional) clip extremely large values
-        #    e.g. clip to some percentile, if you know your domain
-        #    Uncomment if needed:
-        #   for col in X_clean.columns:
-        #       upper = X_clean[col].quantile(0.999)
-        #       lower = X_clean[col].quantile(0.001)
-        #       X_clean[col] = X_clean[col].clip(lower, upper)
-
-        # 3) Impute missing values
+        # 2) Impute missing
         imputer = SimpleImputer(strategy=impute_strategy)
         X_imp = pd.DataFrame(
             imputer.fit_transform(X_clean),
@@ -735,24 +725,63 @@ class Preprocessor:
         )
         logger.info(f"Imputed missing values using strategy='{impute_strategy}'")
 
-        # 4) Run Boruta
-        rf = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=None,
-            random_state=random_state,
-            n_jobs=-1
-        )
+        class _XGBRankerWrapper:
+            def __init__(self, params, group, random_state):
+                self._params = params.copy()
+                # Add eval_metric to params during initialization
+                self._params['eval_metric'] = 'ndcg@5'
+                self._group = group
+                self.random_state = random_state
+                self.model = None
+
+            def fit(self, X_arr, y_arr):
+                self.model = XGBRanker(**self._params)
+                self.model.fit(
+                    X_arr, y_arr,
+                    group=self._group,
+                    verbose=False
+                )
+                return self
+
+            @property
+            def feature_importances_(self):
+                return self.model.feature_importances_
+
+            def get_params(self, deep=True):
+                # BorutaPy uses this to inspect max_depth, n_estimators, etc.
+                return self._params.copy()
+
+            def set_params(self, **kwargs):
+                # BorutaPy sometimes updates params via set_params
+                self._params.update(kwargs)
+                return self
+
+        # … previous cleaning & imputation steps …
+
+        # 3) Prepare sklearn-style wrapper around XGBRanker
+        xgb_params = {
+            'objective': 'rank:ndcg',
+            'learning_rate': 0.1,
+            'max_depth': 6,
+            'n_estimators': 100,
+            'random_state': random_state,
+            'n_jobs': -1
+        }
+        wrapper = _XGBRankerWrapper(xgb_params, group, random_state)
+
         boruta = BorutaPy(
-            estimator=rf,
+            estimator=wrapper,
             n_estimators='auto',
             max_iter=max_iter,
             random_state=random_state,
             verbose=2
         )
-        boruta.fit(X_imp.values, y)
 
+        # 4) Run Boruta
+        boruta.fit(X_imp.values, y)
         confirmed = X.columns[boruta.support_].tolist()
-        logger.info(f"Boruta confirmed {len(confirmed)} features: {confirmed}")
+
+        logger.info(f"Boruta (XGBRanker) confirmed {len(confirmed)} features: {confirmed}")
         return confirmed
 
 
