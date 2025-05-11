@@ -543,34 +543,39 @@ class Preprocessor:
         """
         Frequency encode categorical columns in the dataframe.
 
-        Parameters:
-        -----------
-        cols : List[str]
-            List of column names to frequency encode
-
-        Returns:
-        --------
-        pd.DataFrame
-            The dataframe with categorical columns frequency encoded
+        This version avoids block fragmentation by building all new columns
+        at once and concatenating them in one go.
         """
         if self.df is None:
             raise ValueError("No dataframe to encode. Please set a dataframe first.")
 
-        for col in cols:
-            if col not in self.df.columns:
-                logger.warning(f"Column '{col}' not in dataframe. Skipping.")
-                continue
+        # Filter down to only cols that actually exist
+        valid_cols = [c for c in cols if c in self.df.columns]
+        if not valid_cols:
+            logger.info("No columns available for frequency encoding.")
+            return self.df
 
+        # Compute all frequency maps
+        freq_maps: Dict[str, pd.Series] = {}
+        for col in valid_cols:
             freq = self.df[col].value_counts(normalize=True)
-            new_col_name = f"{col}_freq"
-            self.df[new_col_name] = self.df[col].map(freq)
-            logger.info(f"Frequency encoded column '{col}' into '{new_col_name}'")
+            freq_maps[f"{col}_freq"] = self.df[col].map(freq)
+            logger.info(f"Prepared freq-encoding for '{col}'")
 
+        # Build a small DataFrame of all new columns
+        freq_df = pd.DataFrame(freq_maps, index=self.df.index)
+
+        # Concatenate once
+        self.df = pd.concat([self.df, freq_df], axis=1)
+        logger.info(f"Added {len(freq_maps)} frequency-encoded columns: {list(freq_maps.keys())}")
+
+        # Drop originals if desired
         if drop_original:
-            self.df.drop(columns=cols, inplace=True)
-            logger.info(f"Dropped original columns after frequency encoding: {cols}")
+            self.df.drop(columns=valid_cols, inplace=True)
+            logger.info(f"Dropped original columns after frequency encoding: {valid_cols}")
 
         return self.df
+
 
     def encode(self,
             prob_encode_cols: List[str] = None,
@@ -631,7 +636,7 @@ class Preprocessor:
         logger.info(f"Filtered features based on top {top_n} features")
         return self.df
 
-    def remove_highly_correlated_features(self, threshold: float = 0.95) -> pd.DataFrame:
+    def remove_highly_correlated_features(self, threshold: float = 0.95, to_drop: List[str] = None) -> pd.DataFrame:
         """
         Remove features that are highly correlated with any other feature,
         but only drop one from each correlated pair: the one with higher
@@ -640,34 +645,39 @@ class Preprocessor:
         if self.df is None:
             raise ValueError("No dataframe to filter. Please set a dataframe first.")
         
-        # Select only numeric features (exclude targets)
-        df_num = self.df.select_dtypes(include=[np.number]).copy()
-        df_num = df_num.drop(columns=[c for c in self.target_cols if c in df_num], errors='ignore')
+        if to_drop:
+            logger.info(f"Removing highly correlated features based on previous run")
         
-        # Compute correlation matrix and absolute values
-        corr = df_num.corr().abs()
-        # Create mask for upper triangle
-        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        else:
+            logger.info(f"Removing highly correlated features with threshold {threshold}")
+            # Select only numeric features (exclude targets)
+            df_num = self.df.select_dtypes(include=[np.number]).copy()
+            df_num = df_num.drop(columns=[c for c in self.target_cols if c in df_num], errors='ignore')
+            
+            # Compute correlation matrix and absolute values
+            corr = df_num.corr().abs()
+            # Create mask for upper triangle
+            upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+            
+            # Find all pairs exceeding threshold
+            to_drop = set()
+            for col in upper.columns:
+                correlated = upper.index[upper[col] > threshold].tolist()
+                for other in correlated:
+                    # compare avg abs-correlation
+                    mean_col = corr[col].mean()
+                    mean_other = corr[other].mean()
+                    # mark whichever has the higher mean correlation
+                    to_drop.add(col if mean_col > mean_other else other)
         
-        # Find all pairs exceeding threshold
-        to_drop = set()
-        for col in upper.columns:
-            correlated = upper.index[upper[col] > threshold].tolist()
-            for other in correlated:
-                # compare avg abs-correlation
-                mean_col = corr[col].mean()
-                mean_other = corr[other].mean()
-                # mark whichever has the higher mean correlation
-                to_drop.add(col if mean_col > mean_other else other)
-        
-        # Drop them once
+            # Drop them once
         if to_drop:
             self.df.drop(columns=list(to_drop), inplace=True)
             logger.info(f"Dropped {len(to_drop)} highly correlated features: {sorted(to_drop)}")
         else:
             logger.info("No highly correlated features found")
-        
-        return self.df
+        self.dropped_cols = list(to_drop)
+        return self.df, self.dropped_cols
 
 
     def boruta_feature_selection_xgbranker(self,
@@ -785,7 +795,7 @@ class Preprocessor:
         return confirmed
 
 
-    def run_pipeline(self, is_test: bool = False, encoder: Dict = None, save: bool = False, name: str = "train") -> pd.DataFrame:
+    def run_pipeline(self, is_test: bool = False, encoder: Dict = None, save: bool = False, name: str = "train", dropped_columns: List[str] = None) -> pd.DataFrame:
         """
         Run the entire preprocessing pipeline.
 
@@ -883,7 +893,8 @@ class Preprocessor:
         ]
 
         # Add property ID statistics to all columns
-        all_cols = self.df[self.df.select_dtypes(include=[np.number])].columns.tolist()
+        all_cols = self.df.select_dtypes(include=[np.number]).columns.tolist() # date_time and vacation_date are not needed anymore
+
         # self.add_statistics_per_group(all_cols,
         #                             stat_func='median',
         #                             with_respect_to="prop_id")
@@ -974,20 +985,20 @@ class Preprocessor:
 
 
         # remove highly correlated features
-        self.remove_highly_correlated_features(threshold=0.90)
 
         # remove non-numeric columns
         self.df = self.df.select_dtypes(include=[np.number]) # date_time and vacation_date are not needed anymore
-
 
 
         if save:
             self.df.to_csv(f"data/processed_{name}.csv", index=False)
             logger.info(f"Saved preprocessed data to data/processed_{name}.csv")
 
-
+        # if self.drop_cols doesnt exist, set it to none
+        if not hasattr(self, 'dropped_cols'):
+            self.dropped_cols = None
         # Return the preprocessed dataframe and encoder if available
         if not is_test:
-            return self.df, self.encoder
+            return self.df, self.encoder, self.dropped_cols
         else:
             return self.df
