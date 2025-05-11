@@ -3,10 +3,30 @@ import pandas as pd
 from typing import List, Dict, Tuple, Union, Optional
 from sklearn.linear_model import LinearRegression
 import logging
+import os
 
+# Create logs directory if it doesn't exist
+os.makedirs("logs", exist_ok=True)
+
+# Logger setup
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Formatter: add timestamp, logger name, function, line number, message
+formatter = logging.Formatter(
+    fmt="%(asctime)s - %(name)s - %(funcName)s - line %(lineno)d - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# File handler
+file_handler = logging.FileHandler("logs/pipeline.log")
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 class Preprocessor:
     """
     A class for preprocessing data, including feature engineering, imputations, and encodings.
@@ -24,9 +44,9 @@ class Preprocessor:
         """
         self.df = df.copy() if df is not None else None
 
-        self.target_cols = ['srch_id', 'prop_id', 'position', 'click_bool', 'booking_bool',
+        self.target_cols = ['position', 'click_bool', 'booking_bool',
                         'gross_bookings_usd', 'target']
-        
+
 
             # List of competitor rate percent diff columns
         self.comp_rate_cols = [
@@ -102,6 +122,7 @@ class Preprocessor:
         """
         if self.df is None:
             raise ValueError("No dataframe to clean. Please set a dataframe first.")
+        logger.info("Cleaning data")
 
         df = self.df.copy()
         self.df = df  # make sure all sub-methods work on self.df
@@ -118,7 +139,7 @@ class Preprocessor:
             self._filter_competitor_rates()
 
         return self.df
-    
+
     ############# IMPUTATIONS #########
     def impute_data(self,
                     sum_imp: List[str] = None,
@@ -148,6 +169,8 @@ class Preprocessor:
         """
         if self.df is None:
             raise ValueError("No dataframe to impute. Please set a dataframe first.")
+        
+        logger.info("Imputing data")
 
         df = self.df.copy()
 
@@ -177,7 +200,8 @@ class Preprocessor:
 
         if regression_imputation:
             for cols in regression_imputation:
-                if cols in df.columns:
+                # Check if all columns in the list exist in the dataframe
+                if all(col in df.columns for col in cols):
                     df = self._regression_imputation(cols[:-1], cols[-1])
 
         self.df = df
@@ -210,6 +234,8 @@ class Preprocessor:
         # predict the missing values
         X_missing = self.df.loc[mask, predictors]
         self.df.loc[mask, target] = model.predict(X_missing)
+
+        logger.info(f"Imputed {target} with regression using {predictors}")
 
         return self.df
 
@@ -248,12 +274,6 @@ class Preprocessor:
             logger.info("Added 'price_desirability' feature")
         else:
             logger.info("Skipped 'price_desirability' (missing columns)")
-
-        if all(col in self.df.columns for col in ['price_usd', 'visitor_hist_adr_usd']):
-            self.df['price_surprise'] = self.df['price_usd'] / self.df['visitor_hist_adr_usd']
-            logger.info("Added 'price_surprise' feature")
-        else:
-            logger.info("Skipped 'price_surprise' (missing columns)")
 
     def _add_price_per_person_per_room(self):
         if 'price_usd' not in self.df.columns:
@@ -298,6 +318,13 @@ class Preprocessor:
             self.df["domestic_trip"] = np.where(self.df["prop_country_id"] == self.df["visitor_location_country_id"], 1, 0)
             logger.info("Added 'domestic_trip' flag")
 
+    def _add_price_surprise(self):
+        if all(col in self.df.columns for col in ['price_usd', 'visitor_hist_adr_usd']):
+            self.df['price_surprise'] = self.df['price_usd'] / self.df['visitor_hist_adr_usd']
+            logger.info("Added 'price_surprise' feature")
+        else:
+            logger.info("Skipped 'price_surprise' (missing columns)")
+
 
 
     def add_relative_features(self, feature_specs: Dict = None, group_key: str = "srch_id") -> pd.DataFrame:
@@ -319,12 +346,14 @@ class Preprocessor:
         if self.df is None:
             raise ValueError("No dataframe to add features to. Please set a dataframe first.")
 
+        logger.info(f"Adding relative features with {feature_specs}, grouped by {group_key}")
+
         df = self.df.copy()
         feature_specs = feature_specs or self.feature_methods
 
         for base_feat, methods in feature_specs.items():
             if base_feat not in df.columns:
-                print(f"Skipping '{base_feat}' (not in DataFrame)")
+                logger.info(f"Skipping '{base_feat}' (not in DataFrame)")
                 continue
 
             group = df.groupby(group_key)[base_feat]
@@ -347,7 +376,7 @@ class Preprocessor:
                 elif method == "rank":
                     df[new_col] = group.rank(method="min")
                 else:
-                    print(f"Unknown method '{method}' for feature '{base_feat}'")
+                    logger.info(f"Unknown method '{method}' for feature '{base_feat}'")
 
         self.df = df
         return df
@@ -376,8 +405,11 @@ class Preprocessor:
         df = self.df.copy()
 
         # Select numeric columns to aggregate
+        exclude_cols = ['srch_id', with_respect_to, 'position', 'click_bool', 'booking_bool',
+                        'gross_bookings_usd', 'target']
+
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        numeric_cols = [col for col in numeric_cols if col not in self.target_cols]
+        numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
 
         # Limit to selected features if provided
         if selected_features:
@@ -439,11 +471,11 @@ class Preprocessor:
                     df[f"{col}_prob_click"] = df[col].map(mean_click)
                     df[f"{col}_prob_book"] = df[col].map(mean_book)
                 else:
-                    print(f"Warning: Encoder for {col} not found.")
+                    logger.info(f"Warning: Encoder for {col} not found. Skipping probability encoding for this column.")
 
             # After encoding, impute missing values (NaN) using the column mean for all modes
             for col in cols:
-                print(f"column {col} has {df[f'{col}_prob_click'].isnull().sum()} nans")
+                logger.info(f"Imputing missing values in {col}_prob_click and {col}_prob_book with column mean")
                 # Impute missing values in the 'prob_click' column with the column's mean
                 global_mean_click = df[f"{col}_prob_click"].mean()
                 df[f"{col}_prob_click"].fillna(global_mean_click, inplace=True)
@@ -456,7 +488,7 @@ class Preprocessor:
             drop_cols = [col for col in cols if col != "prop_id" and col != "srch_id"]
             if drop_cols:
                 df.drop(columns=drop_cols, inplace=True)
-            print(f"Encoded cols using pre-existing encoder and imputed missing values with mean {cols}")
+                logger.info(f"Encoded cols with mean of CLICK and BOOK probabilities {drop_cols}")
         else:
             # Training mode - create encoder
             encoder = {}
@@ -479,20 +511,53 @@ class Preprocessor:
                 if col != "prop_id" and col != "srch_id":
                     df = df.drop(columns=[col])
 
-            print(f"Encoded cols with mean of CLICK and BOOK probabilities {cols}")
-
+            logger.info(f"Encoded cols with mean of CLICK and BOOK probabilities {cols}")
             # Store the encoder
             self.encoder = encoder
 
         self.df = df
         return df
 
-    def encode_categorical(self,
-                           categorical_columns: List[str],
-                           prob_encode_cols: List[str] = None,
-                           is_test: bool = False,
-                           encoder: Dict = None
-                           ) -> pd.DataFrame:
+    def _frequency_encode(self, cols: List[str], drop_original: bool = True) -> pd.DataFrame:
+        """
+        Frequency encode categorical columns in the dataframe.
+
+        Parameters:
+        -----------
+        cols : List[str]
+            List of column names to frequency encode
+
+        Returns:
+        --------
+        pd.DataFrame
+            The dataframe with categorical columns frequency encoded
+        """
+        if self.df is None:
+            raise ValueError("No dataframe to encode. Please set a dataframe first.")
+
+        for col in cols:
+            if col not in self.df.columns:
+                logger.warning(f"Column '{col}' not in dataframe. Skipping.")
+                continue
+
+            freq = self.df[col].value_counts(normalize=True)
+            new_col_name = f"{col}_freq"
+            self.df[new_col_name] = self.df[col].map(freq)
+            logger.info(f"Frequency encoded column '{col}' into '{new_col_name}'")
+
+        if drop_original:
+            self.df.drop(columns=cols, inplace=True)
+            logger.info(f"Dropped original columns after frequency encoding: {cols}")
+
+        return self.df
+
+    def encode(self,
+            prob_encode_cols: List[str] = None,
+            one_hot_encode_cols: List[str] = None,
+            freq_encode_cols: List[str] = None,
+            is_test: bool = False,
+            encoder: Dict = None
+            ) -> pd.DataFrame:
         """
         Encode categorical columns in the dataframe.
 
@@ -505,35 +570,31 @@ class Preprocessor:
             raise ValueError("No dataframe to encode. Please set a dataframe first.")
 
         df = self.df.copy()
-
-        # Get unique counts for each column
-        unique_counts = df[categorical_columns].nunique()
-        binary_cols = unique_counts[unique_counts == 2].index.tolist()
-        low_cardinality_cols = unique_counts[(unique_counts > 2) & (unique_counts < 10)].index.tolist()
-        high_cardinality_cols = unique_counts[unique_counts > 10].index.tolist()
-
-        logger.info(f"Binary categorical columns: {binary_cols}")
-        logger.info(f"Low cardinality categorical columns: {low_cardinality_cols}")
-        logger.info(f"High cardinality categorical columns: {high_cardinality_cols}")
+        logger.info(f"Encoding columns")
 
         # Probability encode high cardinality columns
         prob_encode_cols = [col for col in prob_encode_cols if col in df.columns]
-
         if prob_encode_cols and all(col in df.columns for col in ['click_bool', 'booking_bool']):
-            self.probability_encode(prob_encode_cols)
+            self.probability_encode(prob_encode_cols, is_test=is_test, encoder=encoder)
             # df = df.drop(columns=prob_encode_cols) # already dropped in probability_encode
             logger.info(f"Encoded cols with mean of CLICK and BOOK probabilities {prob_encode_cols}")
 
+        # Frequency encode high cardinality columns
+        freq_encode_cols = [col for col in freq_encode_cols if col in df.columns]
+        if freq_encode_cols:
+            self._frequency_encode(freq_encode_cols, drop_original=True)
+            logger.info(f"Encoded col with frequency encoding {freq_encode_cols}")
+        
         # One-hot encode low cardinality columns
-        if low_cardinality_cols:
-            df = pd.get_dummies(df, columns=low_cardinality_cols, drop_first=True)
-            logger.info(f"Encoded cols with one-hot encoding {low_cardinality_cols}")
+        if one_hot_encode_cols:
+            df = pd.get_dummies(df, columns=one_hot_encode_cols, drop_first=True)
+            logger.info(f"Encoded cols with one-hot encoding {one_hot_encode_cols}")
 
         self.df = df
         return df
 
 
-    def run_pipeline(self, is_test: bool = False, encoder: Dict = None) -> pd.DataFrame:
+    def run_pipeline(self, is_test: bool = False, encoder: Dict = None, save: bool = False, name: str = "train") -> pd.DataFrame:
         """
         Run the entire preprocessing pipeline.
 
@@ -552,6 +613,9 @@ class Preprocessor:
         if self.df is None:
             raise ValueError("No dataframe to preprocess. Please set a dataframe first.")
 
+
+        logger.info(f"Running preprocessing pipeline for {name}")
+
         # Clean data
         self.clean_data(is_test=is_test)
 
@@ -562,7 +626,7 @@ class Preprocessor:
                     mean_imp=None,
                     mode_imp=None,
                     interp_imp=None,
-                    regression_imputation=[["prop_location_score1", "prop_review_score2"]]
+                    regression_imputation=[["prop_location_score1", "prop_review_score"]]
                     )
 
         #### FEATURES
@@ -588,7 +652,7 @@ class Preprocessor:
             "comp5_rate_percent_diff": ["zscore"],
             "comp8_rate": ["pct_rank", "zscore"],
             "srch_query_affinity_score": ["pct_rank", "minmax", "zscore", "rank"],
-            "orig_destination_distance": ["pct_rank", "minmax", "zscore", "rank"],
+            "log_orig_destination_distance": ["pct_rank", "minmax", "zscore", "rank"],
             "visitor_hist_adr_usd": ["pct_rank", "minmax", "zscore", "rank"],
             "visitor_hist_starrating": ["pct_rank", "minmax", "zscore", "rank"],
         }
@@ -638,31 +702,37 @@ class Preprocessor:
 
         #### ENCODINGS
 
+        unique_counts = self.df.nunique()
+        binary_cols = unique_counts[unique_counts == 2].index.tolist()
+        low_cardinality_cols = unique_counts[(unique_counts > 2) & (unique_counts < 10)].index.tolist()
+        high_cardinality_cols = unique_counts[unique_counts > 10].index.tolist()
+
+        logger.info(f"Binary categorical columns: {binary_cols}")
+        logger.info(f"Low cardinality categorical columns: {low_cardinality_cols}")
+        logger.info(f"High cardinality categorical columns: {high_cardinality_cols}")
+
         categorical_columns = [
             "site_id",
             "visitor_location_country_id",
             "prop_country_id",
             "prop_id",
             "srch_destination_id",
-            "random_bool",
         ]
 
-        # cols with 2 unique vals
-        binary_cols = self.df.columns[self.df.nunique() == 2].tolist()
-        # cols with 3-9 unique vals
-        low_cardinality_cols = self.df.columns[(self.df.nunique() > 2) & (self.df.nunique() < 10)].tolist()
-        # cols with 10+ unique vals
-        high_cardinality_cols = self.df.columns[self.df.nunique() >= 10].tolist()
-        
-
-        self.encode_categorical(categorical_columns,
-                                prob_encode_cols=high_cardinality_cols,
-                                is_test=is_test,
-                                encoder=encoder
-                                )
+        self.encode(
+                    prob_encode_cols=[],
+                    one_hot_encode_cols=low_cardinality_cols,
+                    freq_encode_cols=categorical_columns,
+                    is_test=is_test,
+                    encoder=encoder # for probability encoding
+                    )
 
         # Filter features
-        self.filter_features()
+        # self.filter_features()
+
+        if save:
+            self.df.to_csv(f"data/processed_{name}.csv", index=False)
+            logger.info(f"Saved preprocessed data to data/processed_{name}.csv")
 
 
         # Return the preprocessed dataframe and encoder if available
