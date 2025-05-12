@@ -865,7 +865,7 @@ class Preprocessor:
 
         # PROP ID STATS
 
-                # Define top features for property ID statistics
+        # Define top features for property ID statistics
         top_means = [
             'price_usd', 'random_bool', 'prop_location_score2', 'srch_query_affinity_score',
             'srch_length_of_stay', 'prop_log_historical_price', 'promotion_flag', 'comp5_rate',

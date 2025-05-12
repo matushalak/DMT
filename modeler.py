@@ -492,18 +492,32 @@ class Modeler:
         def objective(trial):
             # Define hyperparameters to tune
             param = {
-                "objective": "lambdarank",
-                "metric": "ndcg",
-                "importance_type": "gain",
-                "n_estimators": trial.suggest_int("n_estimators", 50, 300),
-                "num_leaves": trial.suggest_int("num_leaves", 20, 150),
-                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
-                "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
-                "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 5.0),
-                "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 5.0),
-                "random_state": 42,
-                "n_jobs": -1
-            }
+                    "objective": "lambdarank",
+                    "metric": "ndcg",
+                    "importance_type": "gain",
+                    
+                    # Best was 244, explore ±25% (183-305)
+                    "n_estimators": trial.suggest_int("n_estimators", 183, 305),
+                    
+                    # Best was 80, explore ±25% (60-100)
+                    "num_leaves": trial.suggest_int("num_leaves", 60, 100),
+                    
+                    # Best was ~0.142, explore ±25% (0.107-0.178)
+                    "learning_rate": trial.suggest_float("learning_rate", 0.107, 0.178),
+                    
+                    # Best was 27, explore ±7 samples (20-34)
+                    "min_child_samples": trial.suggest_int("min_child_samples", 20, 34),
+                    
+                    # Best was ~4.97, explore ±20% (3.97-5.97)
+                    "lambda_l1": trial.suggest_float("lambda_l1", 3.97, 5.97),
+                    
+                    # Best was ~3.87, explore ±20% (3.09-4.64)
+                    "lambda_l2": trial.suggest_float("lambda_l2", 3.09, 4.64),
+                    
+                    # Fixed parameters
+                    "random_state": 42,
+                    "n_jobs": -1
+                }
 
             # Initialize and train model
             model = lgb.LGBMRanker(**param)
