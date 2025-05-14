@@ -895,51 +895,6 @@ class Preprocessor:
         # Add property ID statistics to all columns
         all_cols = self.df.select_dtypes(include=[np.number]).columns.tolist() # date_time and vacation_date are not needed anymore
 
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='median',
-        #                             with_respect_to="prop_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='mean',
-        #                             with_respect_to="prop_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='std',
-        #                             with_respect_to="prop_id")
-        # self.add_statistics_per_group(top_means,
-        #                             stat_func='median',
-        #                             with_respect_to="srch_destination_id")
-        # self.add_statistics_per_group(top_stds,
-        #                             stat_func='mean',
-        #                             with_respect_to="srch_destination_id")
-        # self.add_statistics_per_group(top_medians,
-        #                             stat_func='std',
-        #                             with_respect_to="srch_destination_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='median',
-        #                             with_respect_to="site_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='mean',
-        #                             with_respect_to="site_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='std',
-        #                             with_respect_to="site_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='median',
-        #                             with_respect_to="visitor_location_country_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='mean',
-        #                             with_respect_to="visitor_location_country_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='std',
-        #                             with_respect_to="visitor_location_country_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='median',
-        #                             with_respect_to="prop_country_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='mean',
-        #                             with_respect_to="prop_country_id")
-        # self.add_statistics_per_group(all_cols,
-        #                             stat_func='std',
-        #                             with_respect_to="prop_country_id")
 
         self.add_statistics_per_group(top_means,
                                     stat_func='median',
@@ -972,16 +927,17 @@ class Preprocessor:
             "srch_destination_id",
         ]
 
+        # WE DONT ENCODE CUZ WE PASS CATEGORICAL FEATURE NAMES TO LGBM MODEL
         # one-hot encode:
         one_hot_encode_cols = ["month", "weekday", "vacation_day_of_week"]
 
-        self.encode(
-                    prob_encode_cols=[],
-                    one_hot_encode_cols=one_hot_encode_cols,
-                    freq_encode_cols=categorical_columns,
-                    is_test=is_test,
-                    encoder=encoder  # for probability encoding
-                    )
+        # self.encode(
+        #             prob_encode_cols=categorical_columns,
+        #             one_hot_encode_cols=one_hot_encode_cols,
+        #             freq_encode_cols=categorical_columns,
+        #             is_test=is_test,
+        #             encoder=encoder  # for probability encoding
+        #             )
 
 
         # remove highly correlated features

@@ -79,14 +79,14 @@ def load_data_and_split(force_raw: bool = False, save_processed_data: bool = Fal
 
 def train_data(save_processed_data: bool = False):
 
-    processed_train_df, processed_val_df, encoder = load_data_and_split(force_raw=True, save_processed_data=save_processed_data)
+    processed_train_df, processed_val_df, encoder = load_data_and_split(force_raw=False, save_processed_data=save_processed_data)
 
     # features from feature selection
-    features = ['site_id', 'visitor_location_country_id', 'visitor_hist_starrating', 'visitor_hist_adr_usd', 'prop_country_id', 'prop_id', 'prop_starrating', 'prop_review_score', 'prop_brand_bool', 'prop_location_score1', 'prop_location_score2', 'prop_log_historical_price', 'price_usd', 'promotion_flag', 'srch_booking_window', 'srch_adults_count', 'srch_children_count', 'srch_room_count', 'random_bool', 'comp2_rate_percent_diff', 'comp5_rate_percent_diff', 'log_orig_destination_distance', 'prop_desirability', 'price_per_person_per_room', 'price_surprise', 'domestic_trip', 'rel_hotel_price_season_aware', 'rel_hotel_price_season_agnostic', 'price_usd_minmax', 'price_usd_rank', 'prop_review_score_zscore', 'prop_review_score_rank', 'prop_location_score1_pct_rank', 'prop_location_score1_zscore', 'prop_location_score1_rank', 'prop_starrating_minmax', 'prop_starrating_zscore', 'prop_starrating_rank', 'prop_location_score2_minmax', 'prop_location_score2_zscore', 'prop_location_score2_rank', 'prop_log_historical_price_pct_rank', 'prop_log_historical_price_minmax', 'prop_log_historical_price_rank', 'comp5_rate_percent_diff_zscore', 'srch_query_affinity_score_pct_rank', 'srch_query_affinity_score_minmax', 'srch_query_affinity_score_zscore', 'srch_query_affinity_score_rank', 'log_orig_destination_distance_minmax', 'log_orig_destination_distance_zscore', 'log_orig_destination_distance_rank', 'prop_location_score2_median', 'prop_log_historical_price_median', 'price_usd_median', 'promotion_flag_median', 'srch_length_of_stay_median', 'srch_booking_window_median', 'srch_saturday_night_bool_median', 'srch_query_affinity_score_median', 'comp5_rate_median', 'comp8_rate_percent_diff_median', 'visitor_location_country_id_mean', 'prop_log_historical_price_mean', 'srch_children_count_mean', 'srch_room_count_mean', 'random_bool_mean', 'comp5_rate_mean', 'comp8_inv_mean', 'prop_location_score2_std', 'prop_log_historical_price_std', 'price_usd_std', 'promotion_flag_std', 'srch_length_of_stay_std', 'srch_query_affinity_score_std', 'comp2_rate_percent_diff_std', 'comp3_rate_percent_diff_std']
+    # features = ['site_id', 'visitor_location_country_id', 'visitor_hist_starrating', 'visitor_hist_adr_usd', 'prop_country_id', 'prop_id', 'prop_starrating', 'prop_review_score', 'prop_brand_bool', 'prop_location_score1', 'prop_location_score2', 'prop_log_historical_price', 'price_usd', 'promotion_flag', 'srch_booking_window', 'srch_adults_count', 'srch_children_count', 'srch_room_count', 'random_bool', 'comp2_rate_percent_diff', 'comp5_rate_percent_diff', 'log_orig_destination_distance', 'prop_desirability', 'price_per_person_per_room', 'price_surprise', 'domestic_trip', 'rel_hotel_price_season_aware', 'rel_hotel_price_season_agnostic', 'price_usd_minmax', 'price_usd_rank', 'prop_review_score_zscore', 'prop_review_score_rank', 'prop_location_score1_pct_rank', 'prop_location_score1_zscore', 'prop_location_score1_rank', 'prop_starrating_minmax', 'prop_starrating_zscore', 'prop_starrating_rank', 'prop_location_score2_minmax', 'prop_location_score2_zscore', 'prop_location_score2_rank', 'prop_log_historical_price_pct_rank', 'prop_log_historical_price_minmax', 'prop_log_historical_price_rank', 'comp5_rate_percent_diff_zscore', 'srch_query_affinity_score_pct_rank', 'srch_query_affinity_score_minmax', 'srch_query_affinity_score_zscore', 'srch_query_affinity_score_rank', 'log_orig_destination_distance_minmax', 'log_orig_destination_distance_zscore', 'log_orig_destination_distance_rank', 'prop_location_score2_median', 'prop_log_historical_price_median', 'price_usd_median', 'promotion_flag_median', 'srch_length_of_stay_median', 'srch_booking_window_median', 'srch_saturday_night_bool_median', 'srch_query_affinity_score_median', 'comp5_rate_median', 'comp8_rate_percent_diff_median', 'visitor_location_country_id_mean', 'prop_log_historical_price_mean', 'srch_children_count_mean', 'srch_room_count_mean', 'random_bool_mean', 'comp5_rate_mean', 'comp8_inv_mean', 'prop_location_score2_std', 'prop_log_historical_price_std', 'price_usd_std', 'promotion_flag_std', 'srch_length_of_stay_std', 'srch_query_affinity_score_std', 'comp2_rate_percent_diff_std', 'comp3_rate_percent_diff_std']
 
-    features = features + ["srch_id", "target"]
-    processed_train_df = processed_train_df[features]
-    processed_val_df = processed_val_df[features]
+    # features = features + ["srch_id", "target"]
+    # processed_train_df = processed_train_df[features]
+    # processed_val_df = processed_val_df[features]
     modeler = Modeler(train_df=processed_train_df, val_df=processed_val_df)
 
     print("Training model...")
@@ -206,7 +206,7 @@ def hyperparameter_tuning_example(save_processed_data: bool = False):
     print(f"Top 20 features: {top_features}")
 
 if __name__ == "__main__":
-    # train_data(save_processed_data=True)
+    train_data(save_processed_data=True)
     # test_data(save_processed_data=True)
-    hyperparameter_tuning_example(save_processed_data=False)
+    # hyperparameter_tuning_example(save_processed_data=False)
     # select_important_features(save_processed_data=True)

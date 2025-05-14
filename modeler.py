@@ -58,9 +58,22 @@ class Modeler:
         self.model = None
         self.feature_importances = None
         self.evals_result = None
+        self.categorical_features = [
+            "site_id",
+            "visitor_location_country_id",
+            "prop_country_id",
+            "prop_id",
+            "srch_destination_id",
+            "month", 
+            "weekday", 
+            "vacation_day_of_week"
+        ]
+        # remove any that aren't in train_df
+        if train_df is not None:
+            self.categorical_features = [col for col in self.categorical_features if col in train_df.columns]
 
         # Default model parameters
-        self.model_params = model_params or {
+        default_params = {
             "objective": "lambdarank",
             "metric": "ndcg",
             "importance_type": "gain",
@@ -73,6 +86,12 @@ class Modeler:
             "random_state": 42,
             "n_jobs": -1
         }
+        
+        # Update with user-provided parameters if any
+        self.model_params = default_params.copy()
+        if model_params:
+            self.model_params.update(model_params)
+        
         # Create plots directory if it doesn't exist
         os.makedirs("plots", exist_ok=True)
         logger.info("Initialized Modeler (plots directory created if it didn't exist)")
@@ -148,9 +167,19 @@ class Modeler:
 
         logger.info(f"Training set shape: {train_x.shape}, Validation set shape: {val_x.shape}")
 
+        # Ensure categorical features exist in the dataframe
+        valid_cat_features = [col for col in self.categorical_features if col in train_x.columns]
+        if len(valid_cat_features) != len(self.categorical_features):
+            missing = set(self.categorical_features) - set(valid_cat_features)
+            logger.warning(f"Some categorical features were not found in the dataframe: {missing}")
+        
+        # Update model parameters with valid categorical features
+        # model_params = self.model_params.copy()
+        # model_params['categorical_feature'] = valid_cat_features
+        logger.info(f"Using categorical features: {valid_cat_features}")
+
         # Initialize and train model
         model = lgb.LGBMRanker(**self.model_params)
-
 
         model.fit(
             X=train_x,
@@ -161,6 +190,7 @@ class Modeler:
             eval_at=eval_at,
             eval_metric="ndcg",
             eval_names=["train", "val"],
+            categorical_feature=valid_cat_features
         )
 
         # Store model and evaluation results
