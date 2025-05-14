@@ -428,20 +428,20 @@ def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFram
 ################ process and run model on test set for submission ################
 if __name__ == '__main__':
     # Prepare and process training data
-    # train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
+    train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
 
     ############# load 20% of training data #############
     # Determine number of rows in file (excluding header)
-    n_rows = sum(1 for _ in open("data/training_set_VU_DM.csv")) - 1
+    # n_rows = sum(1 for _ in open("data/training_set_VU_DM.csv")) - 1
 
-    # Set random seed for reproducibility
-    np.random.seed(42)
+    # # Set random seed for reproducibility
+    # np.random.seed(42)
 
-    # Randomly select 80% of row indices to skip
-    skip = sorted(np.random.choice(np.arange(1, n_rows + 1), size=int(0.9 * n_rows), replace=False))
+    # # Randomly select 80% of row indices to skip
+    # skip = sorted(np.random.choice(np.arange(1, n_rows + 1), size=int(0.9 * n_rows), replace=False))
 
-    # Load only 20% of rows
-    train_df = pd.read_csv("data/training_set_VU_DM.csv", skiprows=skip)
+    # # Load only 20% of rows
+    # train_df = pd.read_csv("data/training_set_VU_DM.csv", skiprows=skip)
     #############################################################
 
     test_df = pd.read_csv(f"data/test_set_VU_DM.csv")
@@ -480,23 +480,23 @@ if __name__ == '__main__':
     train_df = filter_final_features(train_df)
     test_df = filter_final_features(test_df)
 
-    print(" after cleaning and filtering")
-    print(" Train columns:")
-    print(train_df.columns.tolist())
+    # print(" after cleaning and filtering")
+    # print(" Train columns:")
+    # print(train_df.columns.tolist())
 
-    print("\n Test columns:")
-    print(test_df.columns.tolist())
+    # print("\n Test columns:")
+    # print(test_df.columns.tolist())
 
 
     # Train model
     model, train_x = model_trainer(train_df)
 
-    # after training model
-    print(" Train columns:")
-    print(train_x.columns.tolist())
+    # # after training model
+    # print(" Train columns:")
+    # print(train_x.columns.tolist())
 
-    print("\n Test columns:")
-    print(test_df.columns.tolist())
+    # print("\n Test columns:")
+    # print(test_df.columns.tolist())
 
     # Plot feature importance
     plot_feature_importance(model)
