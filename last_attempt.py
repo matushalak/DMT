@@ -28,7 +28,7 @@ def train_clean(df):
     df["log_orig_destination_distance"] = np.log1p(df["orig_destination_distance"])
 
     # Create label for training set: 5 for booking, 1 for click, 0 for nothing
-    df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
+    df["label"] = df["booking_bool"] * 5 + ((df["click_bool"].astype(bool)) & (~df["booking_bool"].astype(bool))) * 1
 
     # Filter unrealistic gross_bookings_usd (only where it's not missing)
     df = df[(df["gross_bookings_usd"].isna()) | ((df["gross_bookings_usd"] >= 10) & (df["gross_bookings_usd"] <= 2000))]
