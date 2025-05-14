@@ -12,6 +12,8 @@ def load_data_and_split(force_raw: bool = False, save_processed_data: bool = Fal
         print("Loading saved processed training data...")
         processed_train_df = pd.read_csv("data/processed_train.csv")
         encoder = None  # placeholder if you want to return it
+        train_preprocessor = Preprocessor(df=processed_train_df)  # placeholder if you want to return it
+        dropped_columns = None  # placeholder if you want to return it
     else:
         print("Loading raw training data...")
         train_df = pd.read_csv("data/training_set_VU_DM.csv")
@@ -28,13 +30,15 @@ def load_data_and_split(force_raw: bool = False, save_processed_data: bool = Fal
         processed_train_df, encoder, dropped_columns = train_preprocessor.run_pipeline(
             is_test=False, save=save_processed_data, name="train", dropped_columns=None
         )
-        _, dropped_columns = train_preprocessor.remove_highly_correlated_features(threshold=0.90, to_drop=None)
+    processed_train_df, dropped_columns = train_preprocessor.remove_highly_correlated_features(threshold=0.90, to_drop=None)
 
 
     # ---------- VALIDATION DATA ----------
     if os.path.exists("data/processed_val.csv") and not force_raw:
         print("Loading saved processed validation data...")
         processed_val_df = pd.read_csv("data/processed_val.csv")
+        val_preprocessor = Preprocessor(processed_val_df)  # placeholder if you want to return it
+        val_preprocessor.dropped_cols = dropped_columns
     else:
         if 'train_df' not in locals():
             print("Loading raw training data for validation split...")
@@ -50,7 +54,7 @@ def load_data_and_split(force_raw: bool = False, save_processed_data: bool = Fal
         processed_val_df = val_preprocessor.run_pipeline(
             is_test=True, encoder=encoder, save=save_processed_data, name="val", dropped_columns=dropped_columns
         )
-        val_preprocessor.remove_highly_correlated_features(threshold=0.90, to_drop=dropped_columns)
+    preprocessed_val_df, _ = val_preprocessor.remove_highly_correlated_features(threshold=0.90, to_drop=dropped_columns)
 
     # remove non numeric columns
     processed_train_df = processed_train_df.select_dtypes(include=[np.number])
@@ -74,12 +78,12 @@ def load_data_and_split(force_raw: bool = False, save_processed_data: bool = Fal
     if "target" not in processed_val_df.columns:
         raise ValueError("Target not in val data")
 
-    return processed_train_df, processed_val_df, encoder
+    return processed_train_df, processed_val_df, encoder, train_preprocessor, val_preprocessor
 
 
-def train_data(save_processed_data: bool = False):
+def train_data(save_processed_data: bool = False, force_raw: bool = False):
 
-    processed_train_df, processed_val_df, encoder = load_data_and_split(force_raw=False, save_processed_data=save_processed_data)
+    processed_train_df, processed_val_df, encoder, train_preprocessor, val_preprocessor = load_data_and_split(force_raw=force_raw, save_processed_data=save_processed_data)
 
     # features from feature selection
     # features = ['site_id', 'visitor_location_country_id', 'visitor_hist_starrating', 'visitor_hist_adr_usd', 'prop_country_id', 'prop_id', 'prop_starrating', 'prop_review_score', 'prop_brand_bool', 'prop_location_score1', 'prop_location_score2', 'prop_log_historical_price', 'price_usd', 'promotion_flag', 'srch_booking_window', 'srch_adults_count', 'srch_children_count', 'srch_room_count', 'random_bool', 'comp2_rate_percent_diff', 'comp5_rate_percent_diff', 'log_orig_destination_distance', 'prop_desirability', 'price_per_person_per_room', 'price_surprise', 'domestic_trip', 'rel_hotel_price_season_aware', 'rel_hotel_price_season_agnostic', 'price_usd_minmax', 'price_usd_rank', 'prop_review_score_zscore', 'prop_review_score_rank', 'prop_location_score1_pct_rank', 'prop_location_score1_zscore', 'prop_location_score1_rank', 'prop_starrating_minmax', 'prop_starrating_zscore', 'prop_starrating_rank', 'prop_location_score2_minmax', 'prop_location_score2_zscore', 'prop_location_score2_rank', 'prop_log_historical_price_pct_rank', 'prop_log_historical_price_minmax', 'prop_log_historical_price_rank', 'comp5_rate_percent_diff_zscore', 'srch_query_affinity_score_pct_rank', 'srch_query_affinity_score_minmax', 'srch_query_affinity_score_zscore', 'srch_query_affinity_score_rank', 'log_orig_destination_distance_minmax', 'log_orig_destination_distance_zscore', 'log_orig_destination_distance_rank', 'prop_location_score2_median', 'prop_log_historical_price_median', 'price_usd_median', 'promotion_flag_median', 'srch_length_of_stay_median', 'srch_booking_window_median', 'srch_saturday_night_bool_median', 'srch_query_affinity_score_median', 'comp5_rate_median', 'comp8_rate_percent_diff_median', 'visitor_location_country_id_mean', 'prop_log_historical_price_mean', 'srch_children_count_mean', 'srch_room_count_mean', 'random_bool_mean', 'comp5_rate_mean', 'comp8_inv_mean', 'prop_location_score2_std', 'prop_log_historical_price_std', 'price_usd_std', 'promotion_flag_std', 'srch_length_of_stay_std', 'srch_query_affinity_score_std', 'comp2_rate_percent_diff_std', 'comp3_rate_percent_diff_std']
@@ -178,7 +182,7 @@ def test_data(save_processed_data: bool = False):
 def hyperparameter_tuning_example(save_processed_data: bool = False):
     # Example of hyperparameter tuning with proper train/validation split
 
-    processed_train_df, processed_val_df, encoder = load_data_and_split()
+    processed_train_df, processed_val_df, encoder, train_preprocessor, val_preprocessor= load_data_and_split()
 
     features = ['site_id', 'visitor_location_country_id', 'visitor_hist_starrating', 'visitor_hist_adr_usd', 'prop_country_id', 'prop_id', 'prop_starrating', 'prop_review_score', 'prop_brand_bool', 'prop_location_score1', 'prop_location_score2', 'prop_log_historical_price', 'price_usd', 'promotion_flag', 'srch_booking_window', 'srch_adults_count', 'srch_children_count', 'srch_room_count', 'random_bool', 'comp2_rate_percent_diff', 'comp5_rate_percent_diff', 'log_orig_destination_distance', 'prop_desirability', 'price_per_person_per_room', 'price_surprise', 'domestic_trip', 'rel_hotel_price_season_aware', 'rel_hotel_price_season_agnostic', 'price_usd_minmax', 'price_usd_rank', 'prop_review_score_zscore', 'prop_review_score_rank', 'prop_location_score1_pct_rank', 'prop_location_score1_zscore', 'prop_location_score1_rank', 'prop_starrating_minmax', 'prop_starrating_zscore', 'prop_starrating_rank', 'prop_location_score2_minmax', 'prop_location_score2_zscore', 'prop_location_score2_rank', 'prop_log_historical_price_pct_rank', 'prop_log_historical_price_minmax', 'prop_log_historical_price_rank', 'comp5_rate_percent_diff_zscore', 'srch_query_affinity_score_pct_rank', 'srch_query_affinity_score_minmax', 'srch_query_affinity_score_zscore', 'srch_query_affinity_score_rank', 'log_orig_destination_distance_minmax', 'log_orig_destination_distance_zscore', 'log_orig_destination_distance_rank', 'prop_location_score2_median', 'prop_log_historical_price_median', 'price_usd_median', 'promotion_flag_median', 'srch_length_of_stay_median', 'srch_booking_window_median', 'srch_saturday_night_bool_median', 'srch_query_affinity_score_median', 'comp5_rate_median', 'comp8_rate_percent_diff_median', 'visitor_location_country_id_mean', 'prop_log_historical_price_mean', 'srch_children_count_mean', 'srch_room_count_mean', 'random_bool_mean', 'comp5_rate_mean', 'comp8_inv_mean', 'prop_location_score2_std', 'prop_log_historical_price_std', 'price_usd_std', 'promotion_flag_std', 'srch_length_of_stay_std', 'srch_query_affinity_score_std', 'comp2_rate_percent_diff_std', 'comp3_rate_percent_diff_std']
     features = features + ["srch_id", "target"]
@@ -205,8 +209,35 @@ def hyperparameter_tuning_example(save_processed_data: bool = False):
     top_features = modeler.get_feature_importance(top_n=50)
     print(f"Top 20 features: {top_features}")
 
+
+def ensamble_example():
+    # Load training data
+
+    processed_train_df, processed_val_df, encoder, train_preprocessor, val_preprocessor = load_data_and_split(force_raw=False, save_processed_data=True)
+
+    # Get specialized feature sets
+    feature_sets = train_preprocessor.get_specialized_feature_sets()
+
+    # Initialize modeler
+    modeler = Modeler(train_df=processed_train_df, val_df=processed_val_df)
+
+    # Train specialized models
+    specialized_models = modeler.train_specialized_models(feature_sets)
+
+    # # Process test data
+    # test_preprocessor = Preprocessor(test_data)
+    # processed_test_df = test_preprocessor.run_pipeline(is_test=True, name="test", encoder=encoder)
+
+    # # Make ensemble predictions
+    # predictions = modeler.predict_with_specialized_models(processed_test_df, feature_sets)
+
+    # # Or use the complete pipeline
+    # predictions = modeler.ensemble_pipeline(processed_test_df, feature_sets=feature_sets)
+
+
 if __name__ == "__main__":
-    train_data(save_processed_data=True)
+    train_data(save_processed_data=True, force_raw=False)
+    # ensamble_example()
     # test_data(save_processed_data=True)
     # hyperparameter_tuning_example(save_processed_data=False)
     # select_important_features(save_processed_data=True)

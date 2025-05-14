@@ -344,6 +344,13 @@ class Preprocessor:
         else:
             logger.info("Skipped 'price_surprise' (missing columns)")
 
+    # Example of a more sophisticated price feature
+    def _add_price_competitiveness_score(self):
+        """Add feature showing how competitive a hotel's price is in its quality tier"""
+        # Group hotels by star rating and location
+        self.df['price_competitiveness'] = self.df.groupby(['prop_starrating', 'srch_destination_id'])['price_usd'].transform(
+            lambda x: 1 - (x - x.min()) / (x.max() - x.min() + 1e-6)
+        )
 
 
     def add_relative_features(self, feature_specs: Dict = None, group_key: str = "srch_id") -> pd.DataFrame:
@@ -838,6 +845,7 @@ class Preprocessor:
         self._add_desirability_features()
         self._add_price_per_person_per_room()
         self._add_price_surprise()
+        self._add_price_competitiveness_score()
         self._add_new_customer_flag()
         self._add_domestic_trip_flag()
         self._add_seasonality_features(relative_to="srch_destination_id")
@@ -858,7 +866,7 @@ class Preprocessor:
             "visitor_hist_starrating": ["pct_rank", "minmax", "zscore", "rank"],
         }
         # add all feature methods to all columns
-        # feature_methods = {col: ["pct_rank", "minmax", "zscore", "rank"] for col in self.df.columns}
+        feature_methods = {col: ["pct_rank", "minmax", "zscore", "rank"] for col in ['prop_location_score2', 'prop_country_id', 'prop_desirability', 'prop_location_score1', 'rel_hotel_price_season_agnostic', 'promotion_flag']}
 
         self.add_relative_features(feature_methods)
 
@@ -929,7 +937,7 @@ class Preprocessor:
 
         # WE DONT ENCODE CUZ WE PASS CATEGORICAL FEATURE NAMES TO LGBM MODEL
         # one-hot encode:
-        one_hot_encode_cols = ["month", "weekday", "vacation_day_of_week"]
+        # one_hot_encode_cols = ["month", "weekday", "vacation_day_of_week"]
 
         # self.encode(
         #             prob_encode_cols=categorical_columns,
@@ -958,3 +966,80 @@ class Preprocessor:
             return self.df, self.encoder, self.dropped_cols
         else:
             return self.df
+        
+
+    def get_specialized_feature_sets(self) -> Dict[str, List[str]]:
+        """
+        Separate features into specialized categories: price, location, and user preference.
+        Each set includes the original features plus their transformations (ranks, z-scores, etc.)
+        
+        Returns:
+        --------
+        Dict[str, List[str]]
+            Dictionary with keys 'price', 'location', 'user' containing lists of feature names
+        """
+        if self.df is None:
+            raise ValueError("No dataframe available. Please set a dataframe first.")
+        
+        # Get all available features
+        all_features = self.df.columns.tolist()
+        
+        # Define base features for each category
+        price_base = [
+            'price_usd', 'prop_log_historical_price', 'price_per_person_per_room', 
+            'price_surprise', 'price_competitiveness', 'rel_hotel_price_season_aware',
+            'rel_hotel_price_season_agnostic', 'promotion_flag'
+        ]
+        
+        location_base = [
+            'prop_location_score1', 'prop_location_score2', 'orig_destination_distance',
+            'log_orig_destination_distance', 'srch_destination_id', 'prop_country_id',
+            'domestic_trip'
+        ]
+        
+        user_base = [
+            'visitor_hist_starrating', 'visitor_hist_adr_usd', 'visitor_location_country_id',
+            'srch_adults_count', 'srch_children_count', 'srch_room_count', 'srch_booking_window',
+            'srch_saturday_night_bool', 'srch_query_affinity_score', 'new_customer'
+        ]
+        
+        # Common features to include in all sets
+        common_features = [
+            'srch_id', 'prop_id', 'site_id', 'prop_starrating', 'prop_review_score',
+            'prop_brand_bool', 'month', 'weekday', 'vacation_day_of_week'
+        ]
+        
+        # Function to find all derived features
+        def find_derived_features(base_features):
+            derived = []
+            for base in base_features:
+                # Find all features that start with this base name
+                derived.extend([f for f in all_features if f.startswith(f"{base}_") or 
+                               (base in f and any(suffix in f for suffix in ['_pct_rank', '_zscore', '_rank', '_minmax', '_mean', '_median', '_std']))])
+            return derived
+        
+        # Build complete feature sets
+        price_features = list(set(price_base + find_derived_features(price_base) + common_features))
+        location_features = list(set(location_base + find_derived_features(location_base) + common_features))
+        user_features = list(set(user_base + find_derived_features(user_base) + common_features))
+        
+        # Filter to only include features that exist in the dataframe
+        price_features = [f for f in price_features if f in all_features]
+        location_features = [f for f in location_features if f in all_features]
+        user_features = [f for f in user_features if f in all_features]
+        
+        # Add target column if it exists
+        if 'target' in all_features:
+            price_features.append('target')
+            location_features.append('target')
+            user_features.append('target')
+        
+        logger.info(f"Price features: {len(price_features)} features")
+        logger.info(f"Location features: {len(location_features)} features")
+        logger.info(f"User preference features: {len(user_features)} features")
+        
+        return {
+            'price': price_features,
+            'location': location_features,
+            'user': user_features
+        }

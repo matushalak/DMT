@@ -87,6 +87,7 @@ class Modeler:
             "n_jobs": -1
         }
         
+        
         # Update with user-provided parameters if any
         self.model_params = default_params.copy()
         if model_params:
@@ -868,3 +869,218 @@ class Modeler:
 
         # Close the figure to free memory
         plt.close()
+
+    def train_specialized_models(self, feature_sets: Dict[str, List[str]], 
+                                eval_at: List[int] = [5], target_col: str = 'target') -> Dict[str, lgb.LGBMRanker]:
+        """
+        Train specialized models for different feature categories.
+        
+        Parameters:
+        -----------
+        feature_sets : Dict[str, List[str]]
+            Dictionary with feature category names as keys and feature lists as values
+        eval_at : List[int], optional
+            Positions at which to evaluate NDCG
+        target_col : str, optional
+            Column name for the target variable
+        
+        Returns:
+        --------
+        Dict[str, lgb.LGBMRanker]
+            Dictionary of trained specialized models
+        """
+        if self.train_df is None or self.val_df is None:
+            raise ValueError("Training or validation dataframe missing. Please set both first.")
+        
+        specialized_models = {}
+        specialized_scores = {}
+        
+        # Train a model for each feature set
+        for category, features in feature_sets.items():
+            logger.info(f"Training {category} specialized model with {len(features)} features")
+            
+            # Ensure required columns are included
+            required_cols = ['srch_id', target_col]
+            for col in required_cols:
+                if col not in features and col in self.train_df.columns:
+                    features.append(col)
+            
+            # Filter dataframes to only include relevant features
+            train_df_subset = self.train_df[features].copy()
+            val_df_subset = self.val_df[features].copy()
+            
+            # Sort by search ID for consistency
+            train_df_subset = train_df_subset.sort_values(by="srch_id")
+            val_df_subset = val_df_subset.sort_values(by="srch_id")
+            
+            # Create group sizes
+            group_sizes_train = train_df_subset.groupby("srch_id").size().tolist()
+            group_sizes_val = val_df_subset.groupby("srch_id").size().tolist()
+            
+            # Prepare train/val sets
+            to_drop = [col for col in self.target_cols if col in train_df_subset.columns]
+            train_x = train_df_subset.drop(columns=to_drop)
+            val_x = val_df_subset.drop(columns=to_drop)
+            train_y = train_df_subset[target_col]
+            val_y = val_df_subset[target_col]
+            
+            # Get valid categorical features
+            valid_cat_features = [col for col in self.categorical_features if col in train_x.columns]
+            logger.info(f"Using categorical features for {category} model: {valid_cat_features}")
+            
+            # Initialize and train model
+            model = lgb.LGBMRanker(**self.model_params)
+            
+            model.fit(
+                X=train_x,
+                y=train_y,
+                group=group_sizes_train,
+                eval_set=[(train_x, train_y), (val_x, val_y)],
+                eval_group=[group_sizes_train, group_sizes_val],
+                eval_at=eval_at,
+                eval_metric="ndcg",
+                eval_names=["train", "val"],
+                categorical_feature=valid_cat_features
+            )
+            
+            # Store model and evaluation results
+            specialized_models[category] = model
+            
+            # Calculate final NDCG score
+            final_val_score = model.evals_result_["val"][f"ndcg@{eval_at[0]}"][-1]
+            specialized_scores[category] = final_val_score
+            logger.info(f"{category} model final NDCG@{eval_at[0]} on validation: {final_val_score:.5f}")
+            
+            # Get feature importance
+            importance = pd.DataFrame({
+                'Feature': train_x.columns,
+                'Importance': model.feature_importances_
+            }).sort_values(by='Importance', ascending=False)
+            logger.info(f"Top 20 features for {category} model: {importance.head(20)['Feature'].tolist()}")
+        
+        # Store specialized models
+        self.specialized_models = specialized_models
+        self.specialized_scores = specialized_scores
+
+        # plot learning curves
+        
+        return specialized_models
+
+    def predict_with_specialized_models(self, test_df: pd.DataFrame, feature_sets: Dict[str, List[str]], 
+                                       weights: Dict[str, float] = None) -> pd.DataFrame:
+        """
+        Make predictions using specialized models and combine them.
+        
+        Parameters:
+        -----------
+        test_df : pd.DataFrame
+            Test dataframe to predict on
+        feature_sets : Dict[str, List[str]]
+            Dictionary with feature category names as keys and feature lists as values
+        weights : Dict[str, float], optional
+            Dictionary with model category names as keys and weights as values.
+            If None, weights will be based on validation scores.
+        
+        Returns:
+        --------
+        pd.DataFrame
+            Dataframe with combined predictions
+        """
+        if not hasattr(self, 'specialized_models') or not self.specialized_models:
+            raise ValueError("No specialized models available. Train specialized models first.")
+        
+        # Make a copy to avoid modifying the original
+        test_df = test_df.copy()
+        
+        # If weights not provided, use validation scores
+        if weights is None and hasattr(self, 'specialized_scores'):
+            total_score = sum(self.specialized_scores.values())
+            weights = {k: v/total_score for k, v in self.specialized_scores.items()}
+            logger.info(f"Using weights based on validation scores: {weights}")
+        elif weights is None:
+            # Equal weights if no validation scores available
+            weights = {k: 1/len(self.specialized_models) for k in self.specialized_models.keys()}
+            logger.info(f"Using equal weights: {weights}")
+        
+        # Make predictions with each specialized model
+        predictions = {}
+        for category, model in self.specialized_models.items():
+            # Filter features for this model
+            features = feature_sets[category]
+            
+            # Ensure all required features are in test_df
+            missing_features = [f for f in features if f not in test_df.columns and f != 'target']
+            if missing_features:
+                logger.warning(f"Missing features for {category} model: {missing_features}")
+                # Skip this model if critical features are missing
+                if len(missing_features) > len(features) * 0.2:  # If more than 20% features missing
+                    logger.warning(f"Skipping {category} model due to too many missing features")
+                    continue
+            
+            # Select only available features
+            available_features = [f for f in features if f in test_df.columns and f != 'target' and f != 'srch_id']
+            
+            # Make predictions
+            X_test = test_df[available_features]
+            predictions[category] = model.predict(X_test)
+            
+            # Add individual model predictions to test_df for debugging
+            test_df[f"pred_{category}"] = predictions[category]
+        
+        # Combine predictions using weights
+        test_df["predicted_relevance"] = 0
+        for category, pred in predictions.items():
+            test_df["predicted_relevance"] += weights.get(category, 0) * pred
+        
+        logger.info(f"Made ensemble predictions for {len(test_df)} rows using {len(predictions)} models")
+        
+        return test_df
+
+    def ensemble_pipeline(self, test_df: pd.DataFrame = None, output_file: str = 'predictions_ensemble.csv',
+                         feature_sets: Dict[str, List[str]] = None) -> pd.DataFrame:
+        """
+        Run the full ensemble modeling pipeline: train specialized models, predict, and combine.
+        
+        Parameters:
+        -----------
+        test_df : pd.DataFrame, optional
+            Test dataframe to predict on
+        output_file : str, optional
+            Path to save the predictions
+        feature_sets : Dict[str, List[str]], optional
+            Dictionary with feature category names as keys and feature lists as values.
+            If None, will attempt to get from a Preprocessor instance.
+        
+        Returns:
+        --------
+        pd.DataFrame
+            Dataframe with predictions
+        """
+        if self.train_df is None:
+            raise ValueError("No training dataframe. Please set a training dataframe first.")
+        
+        if self.val_df is None:
+            raise ValueError("No validation dataframe. Please set a validation dataframe first.")
+        
+        # Get feature sets if not provided
+        if feature_sets is None:
+            # Try to create a preprocessor and get feature sets
+            try:
+                from preprocessor import Preprocessor
+                preprocessor = Preprocessor(self.train_df)
+                feature_sets = preprocessor.get_specialized_feature_sets()
+            except Exception as e:
+                raise ValueError(f"Could not automatically get feature sets: {e}. Please provide feature_sets.")
+        
+        # Train specialized models
+        logger.info("Training specialized models")
+        self.train_specialized_models(feature_sets)
+        
+        # If test data is provided, make predictions
+        if test_df is not None:
+            logger.info("Making ensemble predictions")
+            predictions = self.predict_with_specialized_models(test_df, feature_sets)
+            ranked = self.sort_and_save_predictions(predictions, output_file)
+            return ranked
+        
+        return None
