@@ -369,7 +369,7 @@ def model_trainer(df):
         group=group_sizes_train
     )
 
-    return model
+    return model, train_x
 
 
 # ############# feature importance #############
@@ -428,7 +428,22 @@ def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFram
 ################ process and run model on test set for submission ################
 if __name__ == '__main__':
     # Prepare and process training data
-    train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
+    # train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
+
+    ############# load 20% of training data #############
+    # Determine number of rows in file (excluding header)
+    n_rows = sum(1 for _ in open("data/training_set_VU_DM.csv")) - 1
+
+    # Set random seed for reproducibility
+    np.random.seed(42)
+
+    # Randomly select 80% of row indices to skip
+    skip = sorted(np.random.choice(np.arange(1, n_rows + 1), size=int(0.9 * n_rows), replace=False))
+
+    # Load only 20% of rows
+    train_df = pd.read_csv("data/training_set_VU_DM.csv", skiprows=skip)
+    #############################################################
+
     test_df = pd.read_csv(f"data/test_set_VU_DM.csv")
 
     # Keep original train/test srch_ids for later split
@@ -456,14 +471,32 @@ if __name__ == '__main__':
     train_df = train_df.sort_values(by="srch_id")
     test_df = test_df.sort_values(by="srch_id")
 
+    # drop added columns in test set
+    test_df.drop(columns=["position", "click_bool", "booking_bool", "gross_bookings_usd", "label"], inplace=True, errors='ignore')
+
     # Clean datasets differently then filter
     train_df = train_clean(train_df)
     test_df = val_clean(test_df)
     train_df = filter_final_features(train_df)
     test_df = filter_final_features(test_df)
 
+    print(" after cleaning and filtering")
+    print(" Train columns:")
+    print(train_df.columns.tolist())
+
+    print("\n Test columns:")
+    print(test_df.columns.tolist())
+
+
     # Train model
-    model = model_trainer(train_df)
+    model, train_x = model_trainer(train_df)
+
+    # after training model
+    print(" Train columns:")
+    print(train_x.columns.tolist())
+
+    print("\n Test columns:")
+    print(test_df.columns.tolist())
 
     # Plot feature importance
     plot_feature_importance(model)
@@ -481,66 +514,6 @@ if __name__ == '__main__':
 #     final_model = split_and_test()
 #     plot_feature_importance(final_model)
 
-
-
-
-
-
-#################### Hyperparameter tuning with grid search ####################    
-# def grid_search_lgbm_ranker(train_df, param_grid):
-#     """
-#     Performs a grid search on LGBMRanker hyperparameters.
-
-#     Parameters:
-#     - train_df: processed training DataFrame
-#     - param_grid: dictionary with lists of hyperparameters to try
-
-#     Returns:
-#     - List of (params, final_val_ndcg) tuples sorted by NDCG
-#     """
-#     keys, values = zip(*param_grid.items())
-#     all_combinations = [dict(zip(keys, v)) for v in product(*values)]
-#     results = []
-
-#     for i, params in enumerate(all_combinations, 1):
-#         print(f"\n🚀 Testing combination {i}/{len(all_combinations)}: {params}")
-        
-#         model = lgb.LGBMRanker(
-#             objective="lambdarank",
-#             metric="ndcg",
-#             importance_type="gain",
-#             **params
-#         )
-
-#         all_search_ids = train_df["srch_id"].unique()
-#         train_ids, val_ids = train_test_split(all_search_ids, test_size=0.2, random_state=42)
-#         train_set = train_df[train_df["srch_id"].isin(train_ids)]
-#         val_set = train_df[train_df["srch_id"].isin(val_ids)]
-
-#         group_train = train_set.groupby("srch_id").size().tolist()
-#         group_val = val_set.groupby("srch_id").size().tolist()
-
-#         X_train = train_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
-#         y_train = train_set["label"]
-#         X_val = val_set.drop(columns=["srch_id", "label", "position", "click_bool", "booking_bool", "gross_bookings_usd"])
-#         y_val = val_set["label"]
-
-#         model.fit(
-#             X_train, y_train,
-#             group=group_train,
-#             eval_set=[(X_val, y_val)],
-#             eval_group=[group_val],
-#             eval_at=[5],
-#             eval_metric="ndcg",
-#             eval_names=["val"],
-#         )
-
-#         final_val_ndcg = model.evals_result_["val"]["ndcg@5"][-1]
-#         print(f"✅ Final NDCG@5: {final_val_ndcg:.5f}")
-#         results.append((params, final_val_ndcg))
-
-#     results.sort(key=lambda x: x[1], reverse=True)
-#     return results
 
 
 
