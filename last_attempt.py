@@ -67,7 +67,7 @@ def val_clean(df):
     # log transform orig_destination_distance
     df["log_orig_destination_distance"] = np.log1p(df["orig_destination_distance"])
 
-    # df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
+    df["label"] = df["booking_bool"] * 5 + (df["click_bool"] & ~df["booking_bool"]) * 1
 
     # # Filter unrealistic gross_bookings_usd (only where it's not missing)
     # df = df[(df["gross_bookings_usd"].isna()) | ((df["gross_bookings_usd"] >= 10) & (df["gross_bookings_usd"] <= 2000))]
@@ -329,6 +329,7 @@ def split_and_test():
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+    plt.close()
 
     # Print final score
     final_val_score = evals_result["val"]["ndcg@5"][-1]
@@ -397,6 +398,7 @@ def plot_feature_importance(model, top_n=40):
     plt.gca().invert_yaxis()
     plt.tight_layout()
     plt.show()
+    plt.close()
 
     # Print as list
     top_features_list = feat_imp["feature"].tolist()
@@ -426,93 +428,115 @@ def get_predictions(model: lgb.LGBMRanker, test_df: pd.DataFrame) -> pd.DataFram
 
 
 ################ process and run model on test set for submission ################
-if __name__ == '__main__':
-    # Prepare and process training data
-    train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
+# if __name__ == '__main__':
+#     # Prepare and process training data
+#     train_df = pd.read_csv(f"data/training_set_VU_DM.csv")
 
-    ############# load 20% of training data #############
-    # Determine number of rows in file (excluding header)
-    # n_rows = sum(1 for _ in open("data/training_set_VU_DM.csv")) - 1
+#     ############# load 20% of training data #############
+#     # Determine number of rows in file (excluding header)
+#     # n_rows = sum(1 for _ in open("data/training_set_VU_DM.csv")) - 1
 
-    # # Set random seed for reproducibility
-    # np.random.seed(42)
+#     # # Set random seed for reproducibility
+#     # np.random.seed(42)
 
-    # # Randomly select 80% of row indices to skip
-    # skip = sorted(np.random.choice(np.arange(1, n_rows + 1), size=int(0.9 * n_rows), replace=False))
+#     # # Randomly select 80% of row indices to skip
+#     # skip = sorted(np.random.choice(np.arange(1, n_rows + 1), size=int(0.9 * n_rows), replace=False))
 
-    # # Load only 20% of rows
-    # train_df = pd.read_csv("data/training_set_VU_DM.csv", skiprows=skip)
-    #############################################################
+#     # # Load only 20% of rows
+#     # train_df = pd.read_csv("data/training_set_VU_DM.csv", skiprows=skip)
+#     #############################################################
 
-    test_df = pd.read_csv(f"data/test_set_VU_DM.csv")
+#     test_df = pd.read_csv(f"data/test_set_VU_DM.csv")
 
-    # Keep original train/test srch_ids for later split
-    train_srch_ids = train_df["srch_id"].unique()
-    test_srch_ids = test_df["srch_id"].unique()
+#     # Keep original train/test srch_ids for later split
+#     train_srch_ids = train_df["srch_id"].unique()
+#     test_srch_ids = test_df["srch_id"].unique()
 
-    # Add a marker column so we can split again after combining
-    train_df["dataset"] = "train"
-    test_df["dataset"] = "test"
+#     # Add a marker column so we can split again after combining
+#     train_df["dataset"] = "train"
+#     test_df["dataset"] = "test"
 
-    # Combine
-    combined_df = pd.concat([train_df, test_df], ignore_index=True)
+#     # Combine
+#     combined_df = pd.concat([train_df, test_df], ignore_index=True)
 
-    # add features
-    combined_df = add_found_features(combined_df, feature_methods)
-    combined_df = add_prop_id_statistics(combined_df, top_means, 'mean')
-    combined_df = add_prop_id_statistics(combined_df, top_stds, 'std')
-    combined_df = add_prop_id_statistics(combined_df, top_medians, 'median')
+#     # add features
+#     combined_df = add_found_features(combined_df, feature_methods)
+#     combined_df = add_prop_id_statistics(combined_df, top_means, 'mean')
+#     combined_df = add_prop_id_statistics(combined_df, top_stds, 'std')
+#     combined_df = add_prop_id_statistics(combined_df, top_medians, 'median')
 
-    # Split back into train and test
-    train_df = combined_df[combined_df["dataset"] == "train"].copy()
-    test_df = combined_df[combined_df["dataset"] == "test"].copy()
-    train_df.drop(columns=["dataset"], inplace=True)
-    test_df.drop(columns=["dataset"], inplace=True)
-    train_df = train_df.sort_values(by="srch_id")
-    test_df = test_df.sort_values(by="srch_id")
+#     # Split back into train and test
+#     train_df = combined_df[combined_df["dataset"] == "train"].copy()
+#     test_df = combined_df[combined_df["dataset"] == "test"].copy()
+#     train_df.drop(columns=["dataset"], inplace=True)
+#     test_df.drop(columns=["dataset"], inplace=True)
+#     train_df = train_df.sort_values(by="srch_id")
+#     test_df = test_df.sort_values(by="srch_id")
 
-    # drop added columns in test set
-    test_df.drop(columns=["position", "click_bool", "booking_bool", "gross_bookings_usd", "label"], inplace=True, errors='ignore')
+#     # drop added columns in test set
+#     test_df.drop(columns=["position", "click_bool", "booking_bool", "gross_bookings_usd", "label"], inplace=True, errors='ignore')
 
-    # Clean datasets differently then filter
-    train_df = train_clean(train_df)
-    test_df = val_clean(test_df)
-    train_df = filter_final_features(train_df)
-    test_df = filter_final_features(test_df)
+#     # Clean datasets differently then filter
+#     train_df = train_clean(train_df)
+#     test_df = val_clean(test_df)
+#     train_df = filter_final_features(train_df)
+#     test_df = filter_final_features(test_df)
 
-    # print(" after cleaning and filtering")
-    # print(" Train columns:")
-    # print(train_df.columns.tolist())
+#     # print(" after cleaning and filtering")
+#     # print(" Train columns:")
+#     # print(train_df.columns.tolist())
 
-    # print("\n Test columns:")
-    # print(test_df.columns.tolist())
+#     # print("\n Test columns:")
+#     # print(test_df.columns.tolist())
 
 
-    # Train model
-    model, train_x = model_trainer(train_df)
+#     # Train model
+#     model, train_x = model_trainer(train_df)
 
-    # # after training model
-    # print(" Train columns:")
-    # print(train_x.columns.tolist())
+#     # # after training model
+#     # print(" Train columns:")
+#     # print(train_x.columns.tolist())
 
-    # print("\n Test columns:")
-    # print(test_df.columns.tolist())
+#     # print("\n Test columns:")
+#     # print(test_df.columns.tolist())
 
-    # Plot feature importance
-    plot_feature_importance(model)
+#     # Plot feature importance
+#     plot_feature_importance(model)
 
-    # Get predictions
-    TEST_pred = get_predictions(model, test_df)
-    TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
-    print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
+#     # Get predictions
+#     TEST_pred = get_predictions(model, test_df)
+#     TEST_pred.to_csv('VU-DM-2025-Group-100.csv', index=False)
+#     print("✅ Submission file saved as 'VU-DM-2025-Group-100.csv'")
 
 
 
 
 # # for testing
-# if __name__ == '__main__':
-#     final_model = split_and_test()
-#     plot_feature_importance(final_model)
+if __name__ == '__main__':
+    final_model = split_and_test()
+    # plot_feature_importance(final_model)
+    # plot results
+    # loss curves
+    lgb.plot_metric(final_model)
+    plt.tight_layout()
+    plt.savefig('Learning curves.png', dpi = 300)
+    plt.show()
+    plt.close()
+
+    # importance
+    # overall
+    lgb.plot_importance(final_model, max_num_features=20)
+    plt.tight_layout()
+    plt.savefig('Feature imp overall.png', dpi = 300)
+    plt.show()
+    plt.close()
+    
+    # gain
+    lgb.plot_importance(final_model, max_num_features=20,
+                        importance_type='gain')
+    plt.tight_layout()
+    plt.savefig('Feature imp gain.png', dpi = 300)
+    plt.show()
 
 
 
