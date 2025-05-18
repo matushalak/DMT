@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 import matplotlib.pyplot as plt
+import os
 
 from preprocess import preprocess_df, add_features
 

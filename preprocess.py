@@ -84,8 +84,8 @@ def relative_in_SID(df:pd.DataFrame,
 
 def add_features(df:pd.DataFrame
                  )->pd.DataFrame:
-    # 1) Add distance to other properties in query
-    df = mean_distance_to_other_props(df)
+    # # 1) Add distance to other properties in query
+    # df = mean_distance_to_other_props(df)
 
     # location_clustering()
 
